@@ -1,0 +1,12 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/docker/gateway.Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs    # ← this line — persists log files on host
+    depends_on:
+      - postgres
+      - redis
