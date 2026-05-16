@@ -1,0 +1,35 @@
+{
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.12.0",
+    "axios": "^1.16.1",
+    "react-redux": "^9.3.0",
+    "react-router-dom": "^7.15.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^4.3.0"
+  },
+  "name": "coreguard-gateway",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbduManaam/CoreGuard-Gateway.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AbduManaam/CoreGuard-Gateway/issues"
+  },
+  "homepage": "https://github.com/AbduManaam/CoreGuard-Gateway#readme"
+}

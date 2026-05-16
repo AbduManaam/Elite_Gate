@@ -1,12 +1,112 @@
+#Infrastructure configuration file
+
+version: "3.9"
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: edgecore_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 9539Abdu
+      POSTGRES_DB: edgecore
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U edgecore"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - edgecore_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: edgecore_redis
+    command: redis-server --requirepass redis_secret
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - edgecore_net
+
   gateway:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/docker/gateway.Dockerfile
+    container_name: edgecore_gateway
     ports:
       - "8080:8080"
+    env_file:
+      - ../.env
     volumes:
-      - ./logs:/app/logs    # ← this line — persists log files on host
+      # Persist gateway logs on host machine
+      - ../logs:/app/logs
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - edgecore_net
+
+  admin:
+    build:
+      context: ..
+      dockerfile: deploy/docker/admin.Dockerfile
+    container_name: edgecore_admin
+    ports:
+      - "9090:9090"
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - edgecore_net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: edgecore_prometheus
+
+    ports:
+      - "9091:9090"
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+    networks:
+      - edgecore_net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: edgecore_grafana
+
+    ports:
+      - "3001:3000"
+
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+
+    networks:
+      - edgecore_net
+
+volumes:
+  pg_data:
+
+networks:
+  edgecore_net:
+    driver: bridge    

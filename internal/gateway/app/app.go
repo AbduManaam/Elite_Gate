@@ -1,20 +1,24 @@
 package app
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
 
 	"edgecore/internal/config"
-	"edgecore/internal/observability"
 	gateway "edgecore/internal/gateway/server"
+	gatewayRouter "edgecore/internal/gateway"
+	"edgecore/internal/observability"
+	"edgecore/internal/storage"
 )
 
 type App struct {
 	Logger zerolog.Logger
 	Config *config.Config
 	Server *gateway.Server
+	DB     *sql.DB
 }
 
 func StartApp(cfg *config.Config) (*App, error) {
@@ -28,18 +32,25 @@ func StartApp(cfg *config.Config) (*App, error) {
 	logger := observability.NewLogger(cfg.Log)
 	logger.Info().Msg("edgecore gateway starting...")
 
-	// ── 3. Build router ───────────────────────────────────────────────
-	router, err := gateway.NewRouter(logger)
+	// ── 3. Connect to database ───────────────────────────────────────
+	db, err := storage.NewPostgres(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
+	}
+
+	// ── 4. Build router ───────────────────────────────────────────────
+	router, err := gatewayRouter.NewRouter(logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)
 	}
 
-	// ── 4. Build server ───────────────────────────────────────────────
+	// ── 5. Build server ───────────────────────────────────────────────
 	server := gateway.NewServer(cfg.Server.Port, router, logger)
 
 	return &App{
 		Logger: logger,
 		Config: cfg,
 		Server: server,
+		DB:     db,
 	}, nil
 }
