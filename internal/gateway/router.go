@@ -31,7 +31,10 @@ func NewRouter(logger zerolog.Logger) (http.Handler, error) {
 	handler := middleware.Chain(
 		mux,
 		middleware.Recovery,
-		middleware.RequestLogger(logger), // zerolog-aware logger
+		middleware.RequestLogger(logger),
+		middleware.IPFilter,
+		middleware.Auth,
+		middleware.RateLimit,
 	)
 
 	return handler, nil

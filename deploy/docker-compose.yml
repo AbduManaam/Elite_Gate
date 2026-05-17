@@ -7,7 +7,7 @@ services:
     image: postgres:16-alpine
     container_name: edgecore_postgres
     environment:
-      POSTGRES_USER: edgecore
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 9539Abdu
       POSTGRES_DB: edgecore_db
     ports:
@@ -16,7 +16,7 @@ services:
       - pg_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U edgecore"]
+      test: ["CMD-SHELL","pg_isready -U postgres -d edgecore_db"]
       interval: 5s
       timeout: 5s
       retries: 5
