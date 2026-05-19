@@ -9,7 +9,6 @@ import (
 
 	"edgecore/internal/config"
 	gatewayRouter "edgecore/internal/gateway"
-	"edgecore/internal/gateway/middleware"
 	gateway "edgecore/internal/gateway/server"
 	"edgecore/internal/observability"
 	"edgecore/internal/storage"
@@ -45,17 +44,8 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to build router: %w", err)
 	}
 
-	handler := middleware.Chain(
-    router,
-    middleware.Recovery,
-    middleware.RequestLogger(logger),
-    middleware.IPFilter,
-    middleware.Auth,
-    middleware.RateLimit,
-)
-
 	// ── 5. Build server ───────────────────────────────────────────────
-	server := gateway.NewServer(cfg.Server.Port, handler, logger)
+	server := gateway.NewServer(cfg.Server.Port, router, logger)
 
 	return &App{
 		Logger: logger,
