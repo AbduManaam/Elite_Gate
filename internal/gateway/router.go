@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"os"
 
 	"edgecore/internal/gateway/middleware"
 	"edgecore/internal/gateway/proxy"
@@ -12,7 +13,12 @@ import (
 func NewRouter(logger zerolog.Logger) (http.Handler, error) {
 
 	// ── 1. Reverse proxy ──────────────────────────────────────────────
-	p, err := proxy.New("http://localhost:9090")
+	adminURL := os.Getenv("ADMIN_API_URL")
+	if adminURL == "" {
+		adminURL = "http://admin:9090" // Default for Docker networking
+	}
+
+	p, err := proxy.New(adminURL)
 	if err != nil {
 		return nil, err
 	}

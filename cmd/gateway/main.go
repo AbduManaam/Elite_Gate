@@ -8,19 +8,19 @@ import (
 )
 
 func main() {
-	// ── 1. Load config ────────────────────────────────────────────────
+	//Load config 
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("cannot load config: %v", err)
 	}
 
-	// ── 2. Start app (logger + router + server) ───────────────────────
+	// 2. Start app (logger + router + server)
 	a, err := app.StartApp(cfg)
 	if err != nil {
 		log.Fatalf("cannot start app: %v", err)
 	}
 
-	// ── 3. Run (blocks until Ctrl+C / SIGTERM) ────────────────────────
+	// 3. Run (blocks until Ctrl+C / SIGTERM)
 	if err := a.Server.Run(); err != nil {
 		a.Logger.Fatal().Err(err).Msg("server exited with error")
 	}

@@ -23,28 +23,28 @@ type App struct {
 
 func StartApp(cfg *config.Config) (*App, error) {
 
-	// ── 1. Create logs directory ──────────────────────────────────────
+	// Create logs directory 
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
-	// ── 2. Build logger ───────────────────────────────────────────────
+	// Build logger 
 	logger := observability.NewLogger(cfg.Log)
 	logger.Info().Msg("edgecore gateway starting...")
 
-	// ── 3. Connect to database ───────────────────────────────────────
+	//  Connect to database 
 	db, err := storage.NewPostgres(logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 	}
 
-	// ── 4. Build router ───────────────────────────────────────────────
+	// Build router 
 	router, err := gatewayRouter.NewRouter(logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)
 	}
 
-	// ── 5. Build server ───────────────────────────────────────────────
+	// Build server 
 	server := gateway.NewServer(cfg.Server.Port, router, logger)
 
 	return &App{
