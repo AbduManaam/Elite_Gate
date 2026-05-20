@@ -31,16 +31,24 @@ func NewRouter(logger zerolog.Logger) (http.Handler, error) {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	mux.Handle("/api/", http.StripPrefix("/api", p))
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ready"}`))
+	})
+
+	apiHandler := middleware.Chain(
+		http.StripPrefix("/api", p),
+		middleware.IPFilter,
+		middleware.Auth,
+		middleware.RateLimit,
+	)
+	mux.Handle("/api/", apiHandler)
 
 	// ── 3. Middleware chain ───────────────────────────────────────────
 	handler := middleware.Chain(
 		mux,
 		middleware.Recovery,
 		middleware.RequestLogger(logger),
-		middleware.IPFilter,
-		middleware.Auth,
-		middleware.RateLimit,
 	)
 
 	return handler, nil

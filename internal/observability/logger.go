@@ -14,56 +14,62 @@ import (
 // NewLogger builds and returns a zerolog.Logger.
 // Caller stores it on the App struct — no global state.
 func NewLogger(cfg config.LogConfig) zerolog.Logger {
+	return NewServiceLogger(cfg, "edgecore-gateway")
+}
 
-    // ── 1. Lumberjack: rotating file writer ──────────────────────────
-    fileWriter := &lumberjack.Logger{
-        Filename:   cfg.File,       // "logs/gateway.log"
-        MaxSize:    cfg.MaxSizeMB,  // MB before rotation
-        MaxBackups: cfg.MaxBackups, // old files to keep
-        MaxAge:     cfg.MaxAgeDays, // days before deletion
-        Compress:   true,           // gzip old files → gateway.log.1.gz
-    }
+// NewServiceLogger builds and returns a zerolog.Logger for one service.
+// Caller stores it on the App struct; no global state is required.
+func NewServiceLogger(cfg config.LogConfig, service string) zerolog.Logger {
 
-    // ── 2. Build output writers ───────────────────────────────────────
-    var writers []io.Writer
+	// ── 1. Lumberjack: rotating file writer ──────────────────────────
+	fileWriter := &lumberjack.Logger{
+		Filename:   cfg.File,       // "logs/gateway.log"
+		MaxSize:    cfg.MaxSizeMB,  // MB before rotation
+		MaxBackups: cfg.MaxBackups, // old files to keep
+		MaxAge:     cfg.MaxAgeDays, // days before deletion
+		Compress:   true,           // gzip old files → gateway.log.1.gz
+	}
 
-    // Always write JSON to file
-    writers = append(writers, fileWriter)
+	// ── 2. Build output writers ───────────────────────────────────────
+	var writers []io.Writer
 
-    // In debug mode: pretty console output for local dev
-    // In production: JSON to stdout (works with Grafana Loki, ELK etc.)
-    if cfg.Level == "debug" {
-        writers = append(writers, zerolog.ConsoleWriter{
-            Out:        os.Stdout,
-            TimeFormat: time.RFC3339,
-        })
-    } else {
-        writers = append(writers, os.Stdout)
-    }
+	// Always write JSON to file
+	writers = append(writers, fileWriter)
 
-    // ── 3. Fan-out to all writers ─────────────────────────────────────
-    multi := zerolog.MultiLevelWriter(writers...)
+	// In debug mode: pretty console output for local dev
+	// In production: JSON to stdout (works with Grafana Loki, ELK etc.)
+	if cfg.Level == "debug" {
+		writers = append(writers, zerolog.ConsoleWriter{
+			Out:        os.Stdout,
+			TimeFormat: time.RFC3339,
+		})
+	} else {
+		writers = append(writers, os.Stdout)
+	}
 
-    // ── 4. Set global log level ───────────────────────────────────────
-    zerolog.SetGlobalLevel(parseLevel(cfg.Level))
+	// ── 3. Fan-out to all writers ─────────────────────────────────────
+	multi := zerolog.MultiLevelWriter(writers...)
 
-    // ── 5. Build and return the logger ───────────────────────────────
-    return zerolog.New(multi).
-        With().
-        Timestamp().
-        Str("service", "edgecore-gateway").
-        Logger()
+	// ── 4. Set global log level ───────────────────────────────────────
+	zerolog.SetGlobalLevel(parseLevel(cfg.Level))
+
+	// ── 5. Build and return the logger ───────────────────────────────
+	return zerolog.New(multi).
+		With().
+		Timestamp().
+		Str("service", service).
+		Logger()
 }
 
 func parseLevel(l string) zerolog.Level {
-    switch l {
-    case "debug":
-        return zerolog.DebugLevel
-    case "warn":
-        return zerolog.WarnLevel
-    case "error":
-        return zerolog.ErrorLevel
-    default:
-        return zerolog.InfoLevel
-    }
+	switch l {
+	case "debug":
+		return zerolog.DebugLevel
+	case "warn":
+		return zerolog.WarnLevel
+	case "error":
+		return zerolog.ErrorLevel
+	default:
+		return zerolog.InfoLevel
+	}
 }

@@ -21,7 +21,7 @@ func main() {
 	}
 
 	// 3. Run (blocks until Ctrl+C / SIGTERM)
-	if err := a.Server.Run(); err != nil {
+	if err := a.Server.Run(); err != nil {  //internal/gateway/server/server.go:
 		a.Logger.Fatal().Err(err).Msg("server exited with error")
 	}
 }

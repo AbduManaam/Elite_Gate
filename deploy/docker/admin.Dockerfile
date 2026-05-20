@@ -10,6 +10,7 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/admin .
+COPY --from=builder /app/internal/config/config.yaml ./internal/config/config.yaml
 EXPOSE 9090
 CMD ["./admin"]
 

@@ -1,26 +1,24 @@
 package main
 
 import (
-	"fmt"
-	"os"
+	"log"
 
-	"github.com/gin-gonic/gin"
+	"edgecore/internal/admin/app"
+	"edgecore/internal/config"
 )
 
 func main() {
-
-	r := gin.Default()
-
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status": "admin-API is Running",
-		})
-	})
-
-	port := os.Getenv("ADMIN_PORT")
-	if port == "" {
-		port = "9090" // Default port if not set
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("cannot load config: %v", err)
 	}
 
-	r.Run(fmt.Sprintf(":%s", port))
+	a, err := app.StartApp(cfg)
+	if err != nil {
+		log.Fatalf("cannot start admin app: %v", err)
+	}
+
+	if err := a.Server.Run(); err != nil {
+		a.Logger.Fatal().Err(err).Msg("server exited with error")
+	}
 }
