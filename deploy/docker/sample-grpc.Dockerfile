@@ -3,11 +3,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o sample ./cmd/samples/grpc-hello
+RUN CGO_ENABLED=0 go build -o /sample ./cmd/samples/grpc-hello
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
-WORKDIR /app
-COPY --from=builder /app/sample .
+COPY --from=builder /sample /sample
 EXPOSE 50052
-CMD ["./sample"]
+CMD ["/sample"]
