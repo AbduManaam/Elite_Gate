@@ -30,3 +30,7 @@ func main() {
 
 	fmt.Println(signed)
 }
+
+//1. Generate JWT
+//go run .\cmd\token -secret supersecretjwtkey
+// Copy the token output.
