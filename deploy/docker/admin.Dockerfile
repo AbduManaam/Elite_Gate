@@ -11,6 +11,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/admin .
 COPY --from=builder /app/internal/config/config.yaml ./internal/config/config.yaml
+COPY --from=builder /app/migrations ./migrations
 EXPOSE 9090
 CMD ["./admin"]
 

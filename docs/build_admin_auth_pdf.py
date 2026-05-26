@@ -1,4 +1,4 @@
-﻿from docx import Document
+from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_BREAK
 from docx.enum.section import WD_SECTION
@@ -7,10 +7,10 @@ from docx.oxml.ns import qn
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from pathlib import Path
 
-OUT = Path(r"C:\Users\abdum\OneDrive\Desktop\New folder\Coding\CoreGuard Gateway\docs\admin_auth_complete_code_guide.docx")
+OUT = Path(r"C:\Users\abdum\OneDrive\Desktop\New folder\Coding\CoreGuard Gateway\docs\elitegate_admin_auth_complete_code_guide.docx")
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
-DOC_TITLE = "CoreGuard Gateway Admin Auth - Complete Code Guide"
+DOC_TITLE = "EliteGate Admin Auth - Complete Code Guide"
 SUBTITLE = "Phase A1/A2 implementation reference with migration, seed command, repository, JWT/refresh-token rotation, rate limiting, middleware, router wiring, cleanup, and tests."
 
 sections = []
@@ -18,7 +18,7 @@ sections = []
 def add_section(title, body=None, code=None, lang=None):
     sections.append((title, body, code, lang))
 
-add_section("Overview", "This guide is tailored to the current CoreGuard Gateway repo shape: Go module edgecore, Gin routers, database/sql with lib/pq, zerolog logging, migrations under migrations, and existing packages under internal/auth, internal/storage, and internal/admin. The code below is intended as implementation-ready reference. Small naming adjustments may be needed if you choose different constructor wiring.")
+add_section("Overview", "This guide is tailored to the current EliteGate Gateway repo shape: Go module elitegate, Gin routers, database/sql with lib/pq, zerolog logging, migrations under migrations, and existing packages under internal/auth, internal/storage, and internal/admin. The code below is intended as implementation-ready reference. Small naming adjustments may be needed if you choose different constructor wiring.")
 
 add_section("Dependencies", "Add these direct dependencies if they are not already direct in go.mod. The JWT package already exists indirectly, but bcrypt should be direct once used by application code.", """go get golang.org/x/crypto/bcrypt
 # jwt/v5 already exists in this repo indirectly; direct usage is okay.
@@ -114,7 +114,7 @@ func NewAdminTokenManager(secret, issuer string) (*AdminTokenManager, error) {
         return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", MinJWTSecretByteLength)
     }
     if issuer == "" {
-        issuer = "coreguard-admin"
+        issuer = "elitegate-admin"
     }
     return &AdminTokenManager{secret: []byte(secret), issuer: issuer}, nil
 }
@@ -409,9 +409,9 @@ import (
     "net/http"
     "time"
 
-    adminmw "edgecore/internal/admin/middleware"
-    authpkg "edgecore/internal/auth"
-    "edgecore/internal/storage"
+    adminmw "elitegate/internal/admin/middleware"
+    authpkg "elitegate/internal/auth"
+    "elitegate/internal/storage"
 
     "github.com/gin-gonic/gin"
     "github.com/rs/zerolog"
@@ -537,7 +537,7 @@ import (
     "net/http"
     "strings"
 
-    authpkg "edgecore/internal/auth"
+    authpkg "elitegate/internal/auth"
     "github.com/gin-gonic/gin"
 )
 
@@ -575,7 +575,7 @@ add_section("internal/admin/router.go wiring pattern", code="""func NewRouter(lo
     r.GET("/health", healthHandler)
     r.GET("/ready", readyHandler)
 
-    adminTokens, err := auth.NewAdminTokenManager(jwtSecret, "coreguard-admin")
+    adminTokens, err := auth.NewAdminTokenManager(jwtSecret, "elitegate-admin")
     if err != nil { panic(err) }
     authRepo := storage.NewAdminAuthRepo(db)
     loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
@@ -611,7 +611,7 @@ import (
     "context"
     "time"
 
-    "edgecore/internal/storage"
+    "elitegate/internal/storage"
     "github.com/rs/zerolog"
 )
 
@@ -706,7 +706,7 @@ for row in meta.rows:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         for para in cell.paragraphs:
             para.paragraph_format.space_after = Pt(0)
-items = [('Project', 'CoreGuard Gateway'), ('Preset', 'compact_reference_guide'), ('Scope', 'Admin auth implementation reference')]
+items = [('Project', 'EliteGate Gateway'), ('Preset', 'compact_reference_guide'), ('Scope', 'Admin auth implementation reference')]
 for i, (k, v) in enumerate(items):
     meta.cell(i,0).text = k
     meta.cell(i,1).text = v
@@ -730,7 +730,7 @@ for idx, (title, body, code, lang) in enumerate(sections, start=1):
 # footer
 for section in doc.sections:
     footer = section.footer.paragraphs[0]
-    footer.text = 'CoreGuard Gateway Admin Auth Code Guide'
+    footer.text = 'EliteGate Admin Auth Code Guide'
     footer.alignment = 1
     footer.runs[0].font.size = Pt(8)
     footer.runs[0].font.color.rgb = RGBColor(90,90,90)

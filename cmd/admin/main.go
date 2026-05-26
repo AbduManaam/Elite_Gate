@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 
-	"edgecore/internal/admin/app"
-	"edgecore/internal/config"
+	"elitegate/internal/admin/app"
+	"elitegate/internal/config"
 )
 
 func main() {

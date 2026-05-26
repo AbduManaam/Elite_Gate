@@ -8,13 +8,13 @@ import (
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"edgecore/internal/config"
+	"elitegate/internal/config"
 )
 
 // NewLogger builds and returns a zerolog.Logger.
 // Caller stores it on the App struct — no global state.
 func NewLogger(cfg config.LogConfig) zerolog.Logger {
-	return NewServiceLogger(cfg, "edgecore-gateway")
+	return NewServiceLogger(cfg, "elitegate-gateway")
 }
 
 // NewServiceLogger builds and returns a zerolog.Logger for one service.

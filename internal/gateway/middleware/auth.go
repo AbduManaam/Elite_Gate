@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"edgecore/internal/auth"
-	"edgecore/internal/shared"
+	"elitegate/internal/auth"
+	"elitegate/internal/shared"
 )
 
 func Auth(next http.Handler) http.Handler {

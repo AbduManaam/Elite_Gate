@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"os"
 
-	"edgecore/internal/gateway/middleware"
-	"edgecore/internal/gateway/proxy"
+	"elitegate/internal/gateway/middleware"
+	"elitegate/internal/gateway/proxy"
 
 	"github.com/rs/zerolog"
 )

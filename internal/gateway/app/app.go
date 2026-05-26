@@ -7,11 +7,11 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"edgecore/internal/config"
-	gatewayRouter "edgecore/internal/gateway"
-	gateway "edgecore/internal/gateway/server"
-	"edgecore/internal/observability"
-	"edgecore/internal/storage"
+	"elitegate/internal/config"
+	gatewayRouter "elitegate/internal/gateway"
+	gateway "elitegate/internal/gateway/server"
+	"elitegate/internal/observability"
+	"elitegate/internal/storage"
 )
 
 type App struct {
@@ -30,7 +30,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 
 	// Build logger 
 	logger := observability.NewLogger(cfg.Log)
-	logger.Info().Msg("edgecore gateway starting...")
+	logger.Info().Msg("elitegate gateway starting...")
 
 	//  Connect to database 
 	db, err := storage.NewPostgres(logger)

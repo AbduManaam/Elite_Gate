@@ -1,6 +1,6 @@
 package router
 
-import "edgecore/internal/model"
+import "elitegate/internal/model"
 
 var routes = []model.Route{
 	{

@@ -36,7 +36,7 @@ func New(targetURL string) (*ReverseProxy, error) {
     p.Director = func(req *http.Request) {
         originalDirector(req)
         req.Header.Set("X-Forwarded-Host", req.Host)
-        req.Header.Set("X-Gateway", "edgecore/1.0")
+        req.Header.Set("X-Gateway", "elitegate/1.0")
         req.Host = target.Host
     }
 

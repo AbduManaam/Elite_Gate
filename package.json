@@ -10,7 +10,7 @@
     "postcss": "^8.5.14",
     "tailwindcss": "^4.3.0"
   },
-  "name": "coreguard-gateway",
+  "name": "elitegate",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -23,13 +23,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AbduManaam/CoreGuard-Gateway.git"
+    "url": "git+https://github.com/AbduManaam/elitegate.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/AbduManaam/CoreGuard-Gateway/issues"
+    "url": "https://github.com/AbduManaam/elitegate/issues"
   },
-  "homepage": "https://github.com/AbduManaam/CoreGuard-Gateway#readme"
+  "homepage": "https://github.com/AbduManaam/elitegate#readme"
 }

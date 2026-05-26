@@ -1,19 +1,34 @@
-create extention if not exists "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-create table admin_users(
-    id uuid primary key  default uuid_generate_v4(),
-    username text unique not null,
-    password_hash text not null,
-    failed_attempts int not null default 0,
-    locked_until timestamp,
-    created_at  timestamp not null default now(),
+CREATE TABLE IF NOT EXISTS admin_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    failed_login_attempts INT NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ NULL,
+    last_login_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-create table refresh_tokens(
-    id uuid primary key default uuid_generate_v4(),
-    admin_id uuid not null references admin_users(id),
-    token_hash TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    revoked BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_user_id UUID NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    token_hash TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ NULL,
+    ip_address TEXT NULL,
+    user_agent TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_admin_users_username
+    ON admin_users(username);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash
+    ON refresh_tokens(token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_admin_user_id
+    ON refresh_tokens(admin_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at
+    ON refresh_tokens(expires_at);

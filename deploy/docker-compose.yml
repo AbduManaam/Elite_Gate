@@ -1,31 +1,31 @@
 #Infrastructure configuration file
+#Infrastructure configuration file
 
 version: "3.9"
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: edgecore_postgres
+    container_name: elitegate_postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 9539Abdu
-      POSTGRES_DB: edgecore_db
+      POSTGRES_DB: elitegate_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ../migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U postgres -d edgecore_db"]
+      test: ["CMD-SHELL","pg_isready -U postgres -d elitegate_db"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - edgecore_net
+      - elitegate_net
 
   redis:
     image: redis:7-alpine
-    container_name: edgecore_redis
+    container_name: elitegate_redis
     command: redis-server --requirepass redis_secret
     ports:
       - "6379:6379"
@@ -35,13 +35,13 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - edgecore_net
+      - elitegate_net
 
   gateway:
     build:
       context: ..
       dockerfile: deploy/docker/gateway.Dockerfile
-    container_name: edgecore_gateway
+    container_name: elitegate_gateway
     ports:
       - "8080:8080"
     env_file:
@@ -56,13 +56,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - edgecore_net
+      - elitegate_net
 
   admin:
     build:
       context: ..
       dockerfile: deploy/docker/admin.Dockerfile
-    container_name: edgecore_admin
+    container_name: elitegate_admin
     ports:
       - "9090:9090"
     env_file:
@@ -76,11 +76,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - edgecore_net
+      - elitegate_net
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: edgecore_prometheus
+    container_name: elitegate_prometheus
 
     ports:
       - "9091:9090"
@@ -89,11 +89,11 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
 
     networks:
-      - edgecore_net
+      - elitegate_net
 
   grafana:
     image: grafana/grafana:latest
-    container_name: edgecore_grafana
+    container_name: elitegate_grafana
 
     ports:
       - "3001:3000"
@@ -102,11 +102,11 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
 
     networks:
-      - edgecore_net
+      - elitegate_net
 
 volumes:
   pg_data:
 
 networks:
-  edgecore_net:
+  elitegate_net:
     driver: bridge    

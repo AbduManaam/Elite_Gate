@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 import sys, textwrap
 from xml.sax.saxutils import escape
 
@@ -12,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, XPreformatted, PageBreak, KeepTogether
 
-OUT = Path(r"C:\Users\abdum\OneDrive\Desktop\New folder\Coding\CoreGuard Gateway\docs\admin_auth_complete_code_guide.pdf")
+OUT = Path(r"C:\Users\abdum\OneDrive\Desktop\New folder\Coding\CoreGuard Gateway\docs\elitegate_admin_auth_complete_code_guide.pdf")
 
 styles = getSampleStyleSheet()
 styles.add(ParagraphStyle(
@@ -58,7 +58,7 @@ def footer(canvas, doc):
     canvas.saveState()
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(colors.HexColor("#666666"))
-    canvas.drawString(inch, 0.5 * inch, "CoreGuard Gateway Admin Auth Code Guide")
+    canvas.drawString(inch, 0.5 * inch, "EliteGate Admin Auth Code Guide")
     canvas.drawRightString(LETTER[0] - inch, 0.5 * inch, f"Page {doc.page}")
     canvas.restoreState()
 
@@ -70,7 +70,7 @@ doc = SimpleDocTemplate(
 story = []
 story.append(Paragraph(escape(guide.DOC_TITLE), styles["GuideTitle"]))
 story.append(Paragraph(escape(guide.SUBTITLE), styles["GuideSubtitle"]))
-meta = Table([["Project", "CoreGuard Gateway"], ["Preset", "compact_reference_guide"], ["Scope", "Admin auth implementation reference"]], colWidths=[1.45*inch, 5.25*inch])
+meta = Table([["Project", "EliteGate Gateway"], ["Preset", "compact_reference_guide"], ["Scope", "Admin auth implementation reference"]], colWidths=[1.45*inch, 5.25*inch])
 meta.setStyle(TableStyle([
     ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#C9D3DF")),
     ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#E8EEF5")),
