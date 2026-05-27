@@ -1,33 +1,30 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/rs/zerolog"
 )
 
-//Full stack trace
+func Recovery(logger zerolog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					logger.Error().
+						Interface("panic", err).
+						Str("stack", string(debug.Stack())).
+						Msg("gateway recovered from panic")
 
-func Recovery(next http.Handler)http.Handler{
-	return http.HandlerFunc(func(
-		w http.ResponseWriter,
-		 r *http.Request) {
-
-			defer func(){
-
-				if ppanic:= recover(); ppanic!=nil{
-					log.Printf(
-                    "Panic: %v\n%s",
-					ppanic,
-                    debug.Stack(),
+					http.Error(
+						w,
+						"internal server error",
+						http.StatusInternalServerError,
 					)
-				http.Error(
-					w,
-					"internal server error",
-					http.StatusInternalServerError,
-				)	
 				}
 			}()
-			next.ServeHTTP(w,r)
-		 })
+			next.ServeHTTP(w, r)
+		})
+	}
 }

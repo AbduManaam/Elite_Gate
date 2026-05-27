@@ -30,35 +30,36 @@ func StartApp(cfg *config.Config) (*App, error) {
 	logger := observability.NewServiceLogger(logCfg, "elitegate-admin")
 	logger.Info().Msg("elitegate admin starting...")
 
-	// Connect to database
-	db, err := storage.NewPostgres(logger)
+	// Connect to postgres using injected database configs
+	db, err := storage.NewPostgres(logger, cfg.Database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 	}
 
-	// Read JWT secret
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET environment variable is required")
+	router, err := admin.NewRouter(logger, db, cfg.Auth.JWTSecret)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to build admin router: %w", err)
 	}
 
-	router := admin.NewRouter(logger, db, jwtSecret)
-	server := adminserver.NewServer(adminPort(), router, logger)
+	// Resolve dynamic admin server port
+	port := cfg.Server.AdminPort
+	if port == "" {
+		port = ":9090"
+	}
+	if port != "" && port[0] != ':' {
+		port = ":" + port
+	}
+
+	server, err := adminserver.NewServer(port, router, logger, cfg.Server)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to create admin server: %w", err)
+	}
 
 	return &App{
 		Logger: logger,
 		Server: server,
 		DB:     db,
 	}, nil
-}
-
-func adminPort() string {
-	port := os.Getenv("ADMIN_PORT")
-	if port == "" {
-		return ":9090"
-	}
-	if port[0] == ':' {
-		return port
-	}
-	return ":" + port
 }

@@ -2,28 +2,32 @@ package gateway
 
 import (
 	"net/http"
-	"os"
 
+	"elitegate/internal/config"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/proxy"
+	"elitegate/internal/ratelimit"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(logger zerolog.Logger) (http.Handler, error) {
-
+func NewRouter(logger zerolog.Logger, rdb *redis.Client, cfg *config.Config) (http.Handler, error) {
 	// ── 1. Reverse proxy ──────────────────────────────────────────────
-	adminURL := os.Getenv("ADMIN_API_URL")
-	if adminURL == "" {
-		adminURL = "http://admin:9090" // Default for Docker networking
-	}
+	adminURL := cfg.Server.AdminAPIURL
 
 	p, err := proxy.New(adminURL)
 	if err != nil {
 		return nil, err
 	}
 
-	// ── 2. Routes ─────────────────────────────────────────────────────
+	// ── 2. Rate Limiter setup ─────────────────────────────────────────
+	rpm := cfg.RateLimit.RequestsPerMinute
+	memFallback := ratelimit.NewMemoryLimiter(rpm)
+	limiter := ratelimit.NewRedisLimiter(rdb, rpm, memFallback)
+	rlMiddleware := middleware.NewRateLimitMiddleware(limiter)
+
+	// ── 3. Routes ─────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -39,15 +43,15 @@ func NewRouter(logger zerolog.Logger) (http.Handler, error) {
 	apiHandler := middleware.Chain(
 		http.StripPrefix("/api", p),
 		middleware.IPFilter,
-		middleware.Auth,
-		middleware.RateLimit,
+		middleware.Auth(cfg.Auth.JWTSecret),
+		rlMiddleware.Middleware,
 	)
 	mux.Handle("/api/", apiHandler)
 
-	// ── 3. Middleware chain ───────────────────────────────────────────
+	// ── 4. Middleware chain ───────────────────────────────────────────
 	handler := middleware.Chain(
 		mux,
-		middleware.Recovery,
+		middleware.Recovery(logger),
 		middleware.RequestLogger(logger),
 	)
 

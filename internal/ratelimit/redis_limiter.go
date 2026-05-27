@@ -1,33 +1,72 @@
 package ratelimit
 
-//sliding window counter
 import (
-    "context"
-    "fmt"
-    "time"
+	"context"
+	"fmt"
+	"time"
 
-    "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9"
 )
 
+var luaScript = redis.NewScript(`
+ local key = KEYS[1]
+ local limit = tonumber(ARGV[1])
+ local window = tonumber(ARGV[2])
+ local current = redis.call("INCR", key)
+ if current == 1 then
+ redis.call("EXPIRE", key, window)
+ end
+ return current
+`)
+
 type RedisLimiter struct {
-    rdb *redis.Client
+	client         *redis.Client
+	requestsPerMin int
+	fallback       Limiter
 }
 
-func NewRedisLimiter(rdb *redis.Client) *RedisLimiter {
-    return &RedisLimiter{rdb: rdb}
+func NewRedisLimiter(client *redis.Client, rpm int, fallback Limiter) *RedisLimiter {
+	return &RedisLimiter{
+		client:         client,
+		requestsPerMin: rpm,
+		fallback:       fallback,
+	}
 }
 
-func (l *RedisLimiter) Allow(ctx context.Context, clientID, route string, rpm int) (bool, error) {
-    now := time.Now()
-    window := now.Unix() / 60       // 1-minute bucket
-    key := fmt.Sprintf("rate:%s:%s:%d", clientID, route, window)
+func (r *RedisLimiter) Allow(key string) bool {
+	if r.client == nil {
+		return r.fallback.Allow(key)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 
-    count, err := l.rdb.Incr(ctx, key).Result()
-    if err != nil {
-        return false, err
-    }
-    if count == 1 {
-        l.rdb.Expire(ctx, key, 2*time.Minute)
-    }
-    return int(count) <= rpm, nil
+	windowKey := fmt.Sprintf("ratelimit:%s:%d", key, time.Now().Unix()/60)
+	result, err := luaScript.Run(ctx, r.client,
+		[]string{windowKey},
+		r.requestsPerMin,
+		60,
+	).Int()
+	if err != nil {
+		return r.fallback.Allow(key)
+	}
+	return result <= r.requestsPerMin
+}
+
+func (r *RedisLimiter) Count(key string) int {
+	if r.client == nil {
+		return r.fallback.Count(key)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	windowKey := fmt.Sprintf("ratelimit:%s:%d", key, time.Now().Unix()/60)
+	val, err := r.client.Get(ctx, windowKey).Int()
+	if err != nil {
+		return r.fallback.Count(key)
+	}
+	return val
+}
+
+func (r *RedisLimiter) Limit() int {
+	return r.requestsPerMin
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,7 +26,8 @@ func main() {
 
 	signed, err := token.SignedString([]byte(*secret))
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "failed to sign token: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Println(signed)

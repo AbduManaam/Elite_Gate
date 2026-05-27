@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"os"
 
 	"elitegate/internal/admin/app"
 	"elitegate/internal/config"
@@ -10,12 +11,14 @@ import (
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("cannot load config: %v", err)
+		fmt.Fprintf(os.Stderr, "cannot load config: %v\n", err)
+		os.Exit(1)
 	}
 
 	a, err := app.StartApp(cfg)
 	if err != nil {
-		log.Fatalf("cannot start admin app: %v", err)
+		fmt.Fprintf(os.Stderr, "cannot start admin app: %v\n", err)
+		os.Exit(1)
 	}
 
 	if err := a.Server.Run(); err != nil {

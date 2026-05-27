@@ -3,7 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"os"
+
+	"elitegate/internal/config"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -12,11 +13,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func NewPostgres(logger zerolog.Logger) (*sql.DB, error) {
-	dsn := os.Getenv("POSTGRES_DSN")
+func NewPostgres(logger zerolog.Logger, cfg config.DatabaseConfig) (*sql.DB, error) {
+	dsn := cfg.DSN
 	if dsn == "" {
-		logger.Error().Msg("POSTGRES_DSN not set")
-		return nil, fmt.Errorf("POSTGRES_DSN not set")
+		logger.Error().Msg("database DSN is empty")
+		return nil, fmt.Errorf("database DSN is empty")
 	}
 
 	db, err := sql.Open("postgres", dsn)
@@ -25,8 +26,8 @@ func NewPostgres(logger zerolog.Logger) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
 
 	if err := db.Ping(); err != nil {
 		logger.Error().Err(err).Msg("postgres ping failed")

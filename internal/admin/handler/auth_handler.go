@@ -18,6 +18,7 @@ import (
 	"time"
 
 	adminmw "elitegate/internal/admin/middleware"
+	pwdpkg "elitegate/internal/admin/password"
 	authpkg "elitegate/internal/auth"
 	"elitegate/internal/storage"
 
@@ -67,6 +68,18 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int    `json:"expires_in"`
 	TokenType    string `json:"token_type"`
+}
+
+// registerRequest is the body for POST /admin/register and POST /admin/v1/admins.
+type registerRequest struct {
+	Username string `json:"username" binding:"required,min=3,max=64"`
+	Password string `json:"password" binding:"required"`
+}
+
+// registerResponse is returned on successful registration.
+type registerResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -342,6 +355,80 @@ func (h *AuthHandler) issueTokens(
 		RefreshToken: refresh,
 		ExpiresIn:    int(authpkg.AccessTokenTTL.Seconds()),
 		TokenType:    "Bearer",
+	})
+}
+
+// Register handles admin account creation.
+//
+// It serves TWO routes with ONE handler:
+//
+//   POST /admin/register     → public, only works when 0 admins exist (bootstrap)
+//   POST /admin/v1/admins    → protected, requires a valid admin JWT
+//
+// How it knows which route called it:
+//   AdminAuth middleware sets admin_user_id in context for the protected route.
+//   If that key is present → authenticated call → skip bootstrap check.
+//   If that key is absent  → public call → enforce bootstrap gate.
+func (h *AuthHandler) Register(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req registerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+
+	// ── Bootstrap gate ────────────────────────────────────────────────
+	// If the caller is NOT authenticated (no admin_user_id in context),
+	// this is the public /admin/register endpoint.
+	// Only allow it when the DB has zero admin users.
+	_, isAuthenticated := c.Get(adminmw.AdminUserIDKey)
+	if !isAuthenticated {
+		count, err := h.repo.AdminUserCount(c.Request.Context())
+		if err != nil {
+			h.internal(c, err)
+			return
+		}
+		if count > 0 {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "registration is locked after bootstrap admin is created",
+			})
+			return
+		}
+	}
+
+	// ── Password strength ─────────────────────────────────────────────
+	if err := pwdpkg.Validate(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// ── Hash password ─────────────────────────────────────────────────
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		h.internal(c, err)
+		return
+	}
+
+	// ── Persist ───────────────────────────────────────────────────────
+	user, err := h.repo.CreateAdminUser(c.Request.Context(), req.Username, string(hash))
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
+		return
+	}
+	if err != nil {
+		h.internal(c, err)
+		return
+	}
+
+	h.logger.Info().
+		Str("username", user.Username).
+		Str("admin_user_id", user.ID).
+		Msg("new admin user registered")
+
+	c.JSON(http.StatusCreated, registerResponse{
+		ID:       user.ID,
+		Username: user.Username,
 	})
 }
 

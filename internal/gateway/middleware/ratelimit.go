@@ -1,57 +1,70 @@
 package middleware
 
 import (
-    "net"
-    "net/http"
-    "sync"
-    "time"
+	"fmt"
+	"net"
+	"net/http"
+	"time"
+
+	"elitegate/internal/ratelimit"
+	"elitegate/internal/shared"
 )
 
-type clientCounter struct {
-    count     int
-    expiresAt time.Time
+type RateLimitMiddleware struct {
+	limiter ratelimit.Limiter
 }
 
-var (
-    mu       sync.Mutex
-    counters = make(map[string]*clientCounter)
-)
+func NewRateLimitMiddleware(limiter ratelimit.Limiter) *RateLimitMiddleware {
+	return &RateLimitMiddleware{
+		limiter: limiter,
+	}
+}
 
-func RateLimit(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientID, _ := r.Context().Value(shared.ContextKeyClientID).(string)
+		if clientID == "" {
+			clientID = extractIP(r)
+		}
+		
+		key := fmt.Sprintf("%s:%s", clientID, r.URL.Path)
 
-        ip, _, err := net.SplitHostPort(r.RemoteAddr)
-        if err != nil {
-            ip = r.RemoteAddr
-        }
+		current := rl.limiter.Count(key)
+		limit := rl.limiter.Limit()
+		remaining := limit - current
+		if remaining < 0 {
+			remaining = 0
+		}
+		resetAt := nextWindowReset()
 
-        mu.Lock()
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetAt.Unix()))
 
-        counter, exists := counters[ip]
+		if !rl.limiter.Allow(key) {
+			w.Header().Set("Retry-After", "60")
+			httpJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":       "rate limit exceeded",
+				"limit":       limit,
+				"retry_after": 60,
+				"reset_at":    resetAt.Unix(),
+			})
+			return
+		}
 
-        if !exists || time.Now().After(counter.expiresAt) {
-            counter = &clientCounter{
-                count:     0,
-                expiresAt: time.Now().Add(time.Minute),
-            }
-            counters[ip] = counter
-        }
+		next.ServeHTTP(w, r)
+	})
+}
 
-        counter.count++
+func extractIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
 
-        if counter.count > 10 {
-            mu.Unlock()
-
-            http.Error(
-                w,
-                "rate limit exceeded",
-                http.StatusTooManyRequests,
-            )
-            return
-        }
-
-        mu.Unlock()
-
-        next.ServeHTTP(w, r)
-    })
+func nextWindowReset() time.Time {
+	now := time.Now()
+	return now.Truncate(time.Minute).Add(time.Minute)
 }

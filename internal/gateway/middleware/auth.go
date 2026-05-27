@@ -4,54 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
+
 	"elitegate/internal/auth"
 	"elitegate/internal/shared"
 )
 
-func Auth(next http.Handler) http.Handler {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "super-secret-key"
-	}
+func Auth(jwtSecret string) func(http.Handler) http.Handler {
+	validator := auth.NewJWTValidator(jwtSecret)
 
-	validator := auth.NewJWTValidator(secret)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+				claims, err := validator.Validate(tokenStr)
+				if err != nil {
+					httpJSON(w, http.StatusUnauthorized, map[string]string{
+						"error":  "invalid token",
+						"detail": err.Error(),
+					})
+					return
+				}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-			claims, err := validator.Validate(tokenStr)
-			if err != nil {
-				httpJSON(w, http.StatusUnauthorized, map[string]string{
-					"error":  "invalid token",
-					"detail": err.Error(),
-				})
+				ctx := context.WithValue(r.Context(), shared.ContextKeyClientID, claims.ClientID)
+				ctx = context.WithValue(ctx, shared.ContextKeyRole, claims.Role)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), shared.ContextKeyClientID, claims.ClientID)
-			ctx = context.WithValue(ctx, shared.ContextKeyRole, claims.Role)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
+			if apiKey := r.Header.Get("X-API-Key"); apiKey == "test-key" {
+				ctx := context.WithValue(r.Context(), shared.ContextKeyClientID, "test-client")
+				ctx = context.WithValue(ctx, shared.ContextKeyRole, "client")
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 
-		if apiKey := r.Header.Get("X-API-Key"); apiKey == "test-key" {
-			ctx := context.WithValue(r.Context(), shared.ContextKeyClientID, "test-client")
-			ctx = context.WithValue(ctx, shared.ContextKeyRole, "client")
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		httpJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "authentication required",
+			httpJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "authentication required",
+			})
 		})
-	})
+	}
 }
 
 // Responsible for:
-
 // reading Authorization header
 // calling JWT validator
 // attaching identity into request context

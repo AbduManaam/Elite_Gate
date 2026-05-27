@@ -2,6 +2,7 @@ package admin
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) http.Handler {
+func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handler, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
@@ -35,7 +36,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) http.Handler
 
 	adminTokens, err := auth.NewAdminTokenManager(jwtSecret, "elitegate-admin")
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("create admin token manager: %w", err)
 	}
 	authRepo := storage.NewAdminAuthRepo(db)
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
@@ -44,6 +45,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) http.Handler
 	r.POST("/admin/login", authHandler.Login)
 	r.POST("/admin/refresh", authHandler.Refresh)
 	r.POST("/admin/logout", authHandler.Logout)
+
+	// ── Public bootstrap registration ─────────────────────────────────
+	// Only works when 0 admin users exist in the database.
+	// After the first admin is created, returns 403 Forbidden.
+	r.POST("/admin/register", authHandler.Register)
 
 	v1 := r.Group("/admin/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))
@@ -55,10 +61,17 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) http.Handler
 			routes.PUT("/:id", updateRouteHandler)
 			routes.DELETE("/:id", deleteRouteHandler)
 		}
+
+		// ── Protected admin account management ────────────────────────
+		// Requires a valid admin JWT. Existing admin creates new admins.
+		admins := v1.Group("/admins")
+		{
+			admins.POST("", authHandler.Register)
+		}
 	}
 
 	logger.Debug().Msg("admin router configured")
-	return r
+	return r, nil
 }
 
 func listRoutesHandler(c *gin.Context) {

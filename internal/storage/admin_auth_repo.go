@@ -388,6 +388,55 @@ func (r *AdminAuthRepo) LockAdminUser(
 }
 
 
+// AdminUserCount returns the total number of admin users in the system.
+// Used by the register endpoint to detect first-run (bootstrap) mode.
+
+func (r *AdminAuthRepo) AdminUserCount(ctx context.Context) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users`).Scan(&count)
+	return count, err
+}
+
+
+// CreateAdminUser inserts a new admin user with a pre-hashed password.
+// Returns sql.ErrNoRows if the username is already taken (ON CONFLICT DO NOTHING).
+
+func (r *AdminAuthRepo) CreateAdminUser(
+	ctx context.Context,
+	username string,
+	passwordHash string,
+) (*AdminUser, error) {
+
+	const q = `
+	INSERT INTO admin_users (username, password_hash)
+	VALUES ($1, $2)
+	ON CONFLICT (username) DO NOTHING
+	RETURNING id, username, password_hash, failed_login_attempts,
+	          locked_until, last_login_at, created_at
+	`
+
+	var u AdminUser
+	err := r.db.QueryRowContext(ctx, q, username, passwordHash).Scan(
+		&u.ID,
+		&u.Username,
+		&u.PasswordHash,
+		&u.FailedLoginAttempts,
+		&u.LockedUntil,
+		&u.LastLoginAt,
+		&u.CreatedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows // username conflict
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &u, nil
+}
+
+
 // Convert string → sql.NullString
 // Used for nullable DB fields
 
