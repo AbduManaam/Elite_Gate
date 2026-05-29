@@ -13,12 +13,11 @@ var routes = []model.Route{
 	},
 }
 
-func Match(path string)*model.Route{
-	for _,route:= range routes{
-       if route.Path==path{
-		return &route
-
-	   }
+func Match(path string) *model.Route {
+	for _, route := range routes {
+		if route.Path == path {
+			return &route
+		}
 	}
 	return nil
 }

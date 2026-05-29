@@ -24,8 +24,8 @@ func main() {
 		w.Write([]byte(`{"id":101,"user_id":1,"amount":99.99,"status":"completed"}`))
 	})
 
-	log.Println("Order service listening on :8000")
-	if err := http.ListenAndServe(":8000", nil); err != nil {
+	log.Println("Order service listening on :9002")
+	if err := http.ListenAndServe(":9002", nil); err != nil {
 		log.Fatal(err)
 	}
 }

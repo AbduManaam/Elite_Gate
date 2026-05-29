@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
@@ -46,7 +47,22 @@ func (g *GRPCGateway) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Periodically refresh backends from route loader snapshot
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				g.RefreshBackends()
+			}
+		}
+	}()
+
 	s := grpc.NewServer(
+		grpc.ForceServerCodec(proxy.ProxyCodec{}),
 		grpc.UnknownServiceHandler(func(srv interface{}, stream grpc.ServerStream) error {
 			// FIX: grpc.MethodFromServerStream is not public API.
 			fullMethod, ok := grpc.Method(stream.Context())

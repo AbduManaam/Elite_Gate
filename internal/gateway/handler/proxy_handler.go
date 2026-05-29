@@ -1,17 +1,32 @@
 package handler
 
 import (
-	"net/http"
-	"sync"
-
 	"elitegate/internal/gateway/proxy"
 	"elitegate/internal/gateway/router"
 	"elitegate/internal/gateway/runtime"
+	"net/http"
+	"strings"
+	"sync"
 )
 
-type DynamicProxy struct {
-	loader *runtime.Loader
+// Client Request
+//       ↓
+// Get routes from memory
+//       ↓
+// Find matching route
+//       ↓
+// No route? → 404
+//       ↓
+// Create/Get reverse proxy
+//       ↓
+// Proxy failed? → 502
+//       ↓
+// Forward request to backend
+//       ↓
+// Return backend response to client
 
+type DynamicProxy struct {
+	loader  *runtime.Loader
 	mu      sync.Mutex
 	proxies map[string]*proxy.ReverseProxy
 }
@@ -24,18 +39,22 @@ func NewDynamicProxy(loader *runtime.Loader) *DynamicProxy {
 }
 
 func (d *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
 	snap := d.loader.Current()
+
 	rt := router.MatchHTTP(r.URL.Path, snap.Routes)
 	if rt == nil {
-		http.Error(w, `{"error":"route not found"}`, http.StatusNotFound)
+		http.Error(w, `{"error":"route not found"}`, http.StatusBadRequest)
+		return
+	}
+	p, err := d.getProxy(rt.UpstreamURL)
+	if err != nil {
+		http.Error(w, `{"error":"bad upstream"}`, http.StatusBadGateway)
 		return
 	}
 
-	p, err := d.getProxy(rt.UpstreamURL)
-	if err != nil {
-		http.Error(w, `` + `{"error":"bad upstream"}` + ``, http.StatusBadGateway)
-		return
-	}
+	// Strip "/api" prefix before forwarding
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
 	p.ServeHTTP(w, r)
 }
 

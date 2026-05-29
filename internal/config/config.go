@@ -25,8 +25,10 @@ type ServerConfig struct {
 	AdminAPIURL     string `mapstructure:"admin_api_url"`
 	ReadTimeout     string `mapstructure:"read_timeout"`
 	WriteTimeout    string `mapstructure:"write_timeout"`
-	IdleTimeout     string `mapstructure:"idle_timeout"`
-	ShutdownTimeout string `mapstructure:"shutdown_timeout"`
+	IdleTimeout         string `mapstructure:"idle_timeout"`
+	ShutdownTimeout     string `mapstructure:"shutdown_timeout"`
+	GRPCGatewayPort     string `mapstructure:"grpc_gateway_port"`
+	RouteReloadInterval string `mapstructure:"route_reload_interval"`
 }
 
 type DatabaseConfig struct {
@@ -76,6 +78,8 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("server.write_timeout", "30s")
 	viper.SetDefault("server.idle_timeout", "60s")
 	viper.SetDefault("server.shutdown_timeout", "30s")
+	viper.SetDefault("server.grpc_gateway_port", ":50051")
+	viper.SetDefault("server.route_reload_interval", "10s")
 	viper.SetDefault("rate_limit.requests_per_minute", 100)
 	viper.SetDefault("app_env", "development")
 
@@ -99,6 +103,8 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.write_timeout", "SERVER_WRITE_TIMEOUT")
 	viper.BindEnv("server.idle_timeout", "SERVER_IDLE_TIMEOUT")
 	viper.BindEnv("server.shutdown_timeout", "SERVER_SHUTDOWN_TIMEOUT")
+	viper.BindEnv("server.grpc_gateway_port", "GRPC_GATEWAY_PORT")
+	viper.BindEnv("server.route_reload_interval", "ROUTE_RELOAD_INTERVAL")
 	viper.BindEnv("app_env", "APP_ENV")
 
 	viper.AutomaticEnv()
@@ -128,6 +134,9 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if err := validateDuration("server.shutdown_timeout", cfg.Server.ShutdownTimeout); err != nil {
+		return nil, err
+	}
+	if err := validateDuration("server.route_reload_interval", cfg.Server.RouteReloadInterval); err != nil {
 		return nil, err
 	}
 

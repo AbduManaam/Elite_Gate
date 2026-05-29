@@ -10,17 +10,19 @@ import (
 	"time"
 
 	"elitegate/internal/config"
+	"elitegate/internal/gateway/runtime"
 
 	"github.com/rs/zerolog"
 )
 
 type Server struct {
 	http            *http.Server
+	grpc            *GRPCGateway
 	logger          zerolog.Logger
 	shutdownTimeout time.Duration
 }
 
-func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig) (*Server, error) {
+func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig, loader *runtime.Loader) (*Server, error) {
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("parse read timeout: %w", err)
@@ -38,9 +40,16 @@ func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg con
 		return nil, fmt.Errorf("parse shutdown timeout: %w", err)
 	}
 
+	grpcPort := cfg.GRPCGatewayPort
+	if grpcPort == "" {
+		grpcPort = ":50051"
+	}
+	grpcGateway := NewGRPCGateway(logger, loader, grpcPort)
+
 	return &Server{
 		logger:          logger,
 		shutdownTimeout: shutdownTimeout,
+		grpc:            grpcGateway,
 		http: &http.Server{
 			Addr:         port,
 			Handler:      handler,
@@ -66,20 +75,33 @@ func (s *Server) Run() error {
 	// ── 2. Block until OS signal ──────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start gRPC server in background
+	go func() {
+		if err := s.grpc.Start(ctx); err != nil {
+			s.logger.Error().Err(err).Msg("gRPC gateway server failed")
+		}
+	}()
+
 	var sig os.Signal
 	select {
 	case err := <-errCh:
+		cancel()
 		return err
 	case sig = <-quit:
 	}
 
 	s.logger.Info().Str("signal", sig.String()).Msg("shutdown signal received")
+	cancel() // Stop gRPC server
 
 	// ── 3. Graceful shutdown (30s timeout) ────────────────────────────
-	ctx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
+	defer shutdownCancel()
 
-	if err := s.http.Shutdown(ctx); err != nil {
+	if err := s.http.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown failed: %w", err)
 	}
 

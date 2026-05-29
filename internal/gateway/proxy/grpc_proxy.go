@@ -26,7 +26,7 @@ func getConn(addr string) (*grpc.ClientConn, error) {
 		return cc, nil
 	}
 	cc, err := grpc.Dial(addr,
-		grpc.WithCodec(proxyCodec{}),
+		grpc.WithCodec(ProxyCodec{}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -62,7 +62,7 @@ func TransparentHandler(backendAddr string) grpc.StreamHandler {
 			StreamName:    fullMethod,
 			ServerStreams: true,
 			ClientStreams: true,
-		}, conn, fullMethod)
+		}, conn, fullMethod, grpc.ForceCodec(ProxyCodec{}))
 		if err != nil {
 			return status.Errorf(codes.Internal, "client stream: %v", err)
 		}
@@ -109,16 +109,16 @@ func copyStream(dst grpc.Stream, src grpc.Stream) error {
 
 type rawFrame struct{ data []byte }
 
-type proxyCodec struct{}
+type ProxyCodec struct{}
 
-func (proxyCodec) Marshal(v interface{}) ([]byte, error) {
+func (ProxyCodec) Marshal(v interface{}) ([]byte, error) {
 	if f, ok := v.(*rawFrame); ok {
 		return f.data, nil
 	}
 	return nil, status.Error(codes.Internal, "invalid frame")
 }
 
-func (proxyCodec) Unmarshal(data []byte, v interface{}) error {
+func (ProxyCodec) Unmarshal(data []byte, v interface{}) error {
 	if f, ok := v.(*rawFrame); ok {
 		f.data = append([]byte(nil), data...)
 		return nil
@@ -126,12 +126,13 @@ func (proxyCodec) Unmarshal(data []byte, v interface{}) error {
 	return status.Error(codes.Internal, "invalid frame")
 }
 
-func (proxyCodec) Name() string { return "proxy" }
+func (ProxyCodec) Name() string { return "proxy" }
+func (ProxyCodec) String() string { return "proxy" }
 
 // ResolveGRPCBackend picks upstream host from route table (longest prefix on service name).
 func ResolveGRPCBackend(fullMethod string, upstreamByPrefix map[string]string) (string, bool) {
-	service := strings.TrimPrefix(fullMethod, "/")
-	if i := strings.Index(service, "/"); i > 0 {
+	service := fullMethod
+	if i := strings.LastIndex(service, "/"); i > 0 {
 		service = service[:i]
 	}
 	var best string
