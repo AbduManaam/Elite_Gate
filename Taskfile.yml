@@ -1,0 +1,193 @@
+version: '3'
+
+vars:
+  COMPOSE_FILE: deploy/docker-compose.yml
+  BIN_DIR: bin
+  GATEWAY_MAIN: ./cmd/gateway
+  ADMIN_MAIN: ./cmd/admin
+  TOKEN_MAIN: ./cmd/token
+  TESTBACKEND: ./cmd/testbackend
+  WORKER_MAIN: ./cmd/worker
+  UI_DIR: web/admin-ui
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # ── Build Tasks ─────────────────────────────────────────────────────────────
+  build-all:
+    desc: Build all service binaries into bin/
+    deps:
+      - build-gateway
+      - build-admin
+      - build-token
+      - build-testbackend
+
+  build-gateway:
+    desc: Build the gateway binary
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/gateway{{exeExt}} {{.GATEWAY_MAIN}}
+
+  build-admin:
+    desc: Build the admin binary
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/admin{{exeExt}} {{.ADMIN_MAIN}}
+
+  build-token:
+    desc: Build the token CLI binary
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/token{{exeExt}} {{.TOKEN_MAIN}}
+
+  build-testbackend:
+    desc: Build the test backend binary
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/testbackend{{exeExt}} {{.TESTBACKEND}}
+
+  # ── Run Tasks (Local Environment with Overrides) ──────────────────────────
+  run-gateway:
+    desc: Run gateway locally against localhost databases
+    env:
+      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      REDIS_ADDR: localhost:6379
+      REDIS_PASSWORD: redis_secret
+      JWT_SECRET: supersecretjwtkey_32byteslongkey!
+      GATEWAY_PORT: "8080"
+      ADMIN_PORT: "9090"
+      ADMIN_API_URL: http://localhost:9090
+      APP_ENV: development
+    cmds:
+      - go run {{.GATEWAY_MAIN}}
+
+  run-admin:
+    desc: Run admin locally against localhost databases
+    env:
+      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      REDIS_ADDR: localhost:6379
+      REDIS_PASSWORD: redis_secret
+      JWT_SECRET: supersecretjwtkey_32byteslongkey!
+      GATEWAY_PORT: "8080"
+      ADMIN_PORT: "9090"
+      ADMIN_API_URL: http://localhost:9090
+      APP_ENV: development
+    cmds:
+      - go run {{.ADMIN_MAIN}}
+
+  run-testbackend:
+    desc: Run mock upstream server
+    cmds:
+      - go run {{.TESTBACKEND}}
+
+  run-worker:
+    desc: Run worker stub
+    cmds:
+      - go run {{.WORKER_MAIN}}
+
+  # ── Quality & Cleaning Tasks ────────────────────────────────────────────────
+  test:
+    desc: Run all Go unit tests
+    cmds:
+      - go test ./...
+
+  fmt:
+    desc: Format Go source files
+    cmds:
+      - gofmt -w .
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove build artifacts folder
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+
+  # ── Docker Stack Tasks ──────────────────────────────────────────────────────
+  docker-up:
+    desc: Start full Docker stack in background
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d
+
+  docker-down:
+    desc: Stop and tear down Docker stack
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} down
+
+  docker-build:
+    desc: Rebuild and start the entire Docker stack
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d --build
+
+  docker-rebuild:
+    desc: Rebuild and restart gateway + admin containers
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d --build gateway admin
+
+  docker-logs:
+    desc: Follow logs of gateway and admin containers
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} logs -f gateway admin
+
+  docker-ps:
+    desc: Show running status of containers
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} ps
+
+  infra-up:
+    desc: Start only the infrastructure (Postgres + Redis)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d postgres redis
+
+  infra-down:
+    desc: Stop only the infrastructure (Postgres + Redis)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} stop postgres redis
+
+  seed-routes:
+    desc: Seed database with sample gateway routes
+    cmds:
+      - cmd: docker exec -i elitegate_postgres psql -U postgres -d elitegate_db < scripts/seed_routes.sql
+        platforms: [linux, darwin]
+      - cmd: powershell -Command "Get-Content scripts/seed_routes.sql | docker exec -i elitegate_postgres psql -U postgres -d elitegate_db"
+        platforms: [windows]
+
+  # ── Utility Tasks ───────────────────────────────────────────────────────────
+  token:
+    desc: Generate a client JWT token
+    env:
+      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      REDIS_ADDR: localhost:6379
+      REDIS_PASSWORD: redis_secret
+      JWT_SECRET: supersecretjwtkey_32byteslongkey!
+      GATEWAY_PORT: "8080"
+      ADMIN_PORT: "9090"
+      ADMIN_API_URL: http://localhost:9090
+      APP_ENV: development
+    cmds:
+      - go run {{.TOKEN_MAIN}} -secret "{{.JWT_SECRET}}" {{if .CLIENT}}-client "{{.CLIENT}}"{{end}} {{if .ROLE}}-role "{{.ROLE}}"{{end}}
+
+  ui-dev:
+    desc: Start admin UI dev server
+    dir: "{{.UI_DIR}}"
+    cmds:
+      - npm run dev
+
+  ui-build:
+    desc: Build admin UI for production
+    dir: "{{.UI_DIR}}"
+    cmds:
+      - npm run build

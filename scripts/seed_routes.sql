@@ -15,3 +15,11 @@ WHERE NOT EXISTS (SELECT 1 FROM routes WHERE path = '/api/orders');
 INSERT INTO routes (path, upstream_url, methods, protocol, match_type, enabled)
 SELECT '/helloworld.v1.Greeter', 'grpc-hello:50052', ARRAY['*'], 'grpc', 'prefix', TRUE
 WHERE NOT EXISTS (SELECT 1 FROM routes WHERE path = '/helloworld.v1.Greeter');
+
+
+-- This seed file inserts sample backend services (upstreams)
+-- and sample routing rules (routes) into the database so the
+-- gateway can work immediately after startup. It creates demo
+-- HTTP and gRPC services and maps request paths like
+-- /api/users and /api/orders to their backend containers.
+-- Used for local development, testing, and demos.

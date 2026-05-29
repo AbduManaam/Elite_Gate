@@ -4,12 +4,12 @@ import "elitegate/internal/model"
 
 var routes = []model.Route{
 	{
-		Path: "/api/users",
-		Upstream: "http://localhost:9001",
+		Path:        "/api/users",
+		UpstreamURL: "http://localhost:9001",
 	},
 	{
-		Path: "/api/orders",
-		Upstream: "http://localhost:9002",
+		Path:        "/api/orders",
+		UpstreamURL: "http://localhost:9002",
 	},
 }
 

@@ -44,6 +44,7 @@ services:
     container_name: elitegate_gateway
     ports:
       - "8080:8080"
+      - "50051:50051"
     env_file:
       - ../.env
     volumes:
@@ -54,6 +55,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      http-user:
+        condition: service_started
+      http-order:
+        condition: service_started
+      grpc-hello:
+        condition: service_started
     restart: unless-stopped
     networks:
       - elitegate_net
@@ -101,6 +108,34 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
 
+    networks:
+      - elitegate_net
+
+  http-user:
+    build:
+      context: ..
+      dockerfile: deploy/docker/sample-http.Dockerfile
+      args:
+        SAMPLE_CMD: ./cmd/samples/http-user
+    container_name: elitegate_http_user
+    networks:
+      - elitegate_net
+
+  http-order:
+    build:
+      context: ..
+      dockerfile: deploy/docker/sample-http.Dockerfile
+      args:
+        SAMPLE_CMD: ./cmd/samples/http-order
+    container_name: elitegate_http_order
+    networks:
+      - elitegate_net
+
+  grpc-hello:
+    build:
+      context: ..
+      dockerfile: deploy/docker/sample-grpc.Dockerfile
+    container_name: elitegate_grpc_hello
     networks:
       - elitegate_net
 
