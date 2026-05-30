@@ -1,31 +1,36 @@
 package main
 
 import (
-	"log"
+	"encoding/json"
 	"net/http"
+	"os"
+
+	"github.com/rs/zerolog"
 )
 
 func main() {
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	logger := zerolog.New(os.Stdout).With().Timestamp().Str("service", "http-user").Logger()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy","service":"user"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":1,"name":"John Doe"},{"id":2,"name":"Jane Smith"}]`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"service":      "http-user-service",
+			"method":       r.Method,
+			"path":         r.URL.Path,
+			"forwarded_by": r.Header.Get("X-Gateway"),
+		})
 	})
 
-	http.HandleFunc("/users/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":1,"name":"John Doe","email":"john@example.com"}`))
-	})
-
-	log.Println("User service listening on :9001")
-	if err := http.ListenAndServe(":9001", nil); err != nil {
-		log.Fatal(err)
+	addr := ":9001"
+	logger.Info().Str("addr", addr).Msg("http-user-service listening")
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		logger.Fatal().Err(err).Msg("server failed")
 	}
 }

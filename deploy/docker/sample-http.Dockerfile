@@ -12,5 +12,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/sample .
-EXPOSE 8000
+EXPOSE 9001 9002
 CMD ["./sample"]
