@@ -11,14 +11,15 @@ import (
 
 type DynamicProxy struct {
 	loader *runtime.Loader
-
+	hostMap map[string]string
 	mu      sync.Mutex
 	proxies map[string]*proxy.ReverseProxy
 }
 
-func NewDynamicProxy(loader *runtime.Loader) *DynamicProxy {
+func NewDynamicProxy(loader *runtime.Loader, hostMap map[string]string) *DynamicProxy {
 	return &DynamicProxy{
 		loader:  loader,
+		hostMap: hostMap,
 		proxies: make(map[string]*proxy.ReverseProxy),
 	}
 }
@@ -45,10 +46,10 @@ func (d *DynamicProxy) getProxy(target string) (*proxy.ReverseProxy, error) {
 	if p, ok := d.proxies[target]; ok {
 		return p, nil
 	}
-	p, err := proxy.New(target)
+	p, err := proxy.New(target, d.hostMap)
 	if err != nil {
 		return nil, err
 	}
 	d.proxies[target] = p
-	return p, nil
+    return p, nil
 }

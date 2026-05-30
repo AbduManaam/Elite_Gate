@@ -22,6 +22,8 @@ type Server struct {
 	shutdownTimeout time.Duration
 }
 
+// HTTP, gRPC gatewayകൾ setup ചെയ്യുന്നു. DevHostMap Docker service പേരുകൾ localhost-ലേക്ക് മാറ്റി, local machine-ൽ run ചെയ്യുന്ന services gateway-ക്ക് കണ്ടെത്താൻ സഹായിക്കുന്നു.
+
 func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig, loader *runtime.Loader) (*Server, error) {
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
 	if err != nil {
@@ -44,7 +46,7 @@ func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg con
 	if grpcPort == "" {
 		grpcPort = ":50051"
 	}
-	grpcGateway := NewGRPCGateway(logger, loader, grpcPort)
+	grpcGateway := NewGRPCGateway(logger, loader, grpcPort, cfg.DevHostMap)
 
 	return &Server{
 		logger:          logger,
@@ -63,16 +65,17 @@ func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg con
 // Run starts the server and blocks until a shutdown signal is received.
 func (s *Server) Run() error {
 
-	// ── 1. Start listening in background ─────────────────────────────
+	//  1. Start listening in background 
 	errCh := make(chan error, 1)
 	go func() {
 		s.logger.Info().Str("addr", s.http.Addr).Msg("gateway listening")
+
 		if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("gateway listen failed: %w", err)
 		}
 	}()
 
-	// ── 2. Block until OS signal ──────────────────────────────────────
+	//  2. Block until OS signal 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -97,7 +100,7 @@ func (s *Server) Run() error {
 	s.logger.Info().Str("signal", sig.String()).Msg("shutdown signal received")
 	cancel() // Stop gRPC server
 
-	// ── 3. Graceful shutdown (30s timeout) ────────────────────────────
+	//  3. Graceful shutdown (30s timeout) 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer shutdownCancel()
 

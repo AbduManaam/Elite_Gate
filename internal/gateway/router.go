@@ -19,7 +19,7 @@ func NewRouter(
 	cfg *config.Config,
 	loader *runtime.Loader,
 ) (http.Handler, error) {
-	dynamic := handler.NewDynamicProxy(loader)
+	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap)
 
 	rpm := cfg.RateLimit.RequestsPerMinute
 	memFallback := ratelimit.NewMemoryLimiter(rpm)

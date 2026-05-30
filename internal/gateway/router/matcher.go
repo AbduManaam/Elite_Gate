@@ -28,3 +28,5 @@ func MatchHTTP(path string, routes []model.Route) *model.Route {
 	}
 	return best
 }
+
+// http://localhost:8080/api/user

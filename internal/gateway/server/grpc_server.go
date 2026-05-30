@@ -16,17 +16,18 @@ import (
 )
 
 type GRPCGateway struct {
-	logger zerolog.Logger
-	loader *runtime.Loader
-	port   string
+	logger  zerolog.Logger
+	loader  *runtime.Loader
+	port    string
+	hostMap map[string]string
 
 	// FIX: cache the backends map and rebuild only when routes change.
 	mu       sync.RWMutex
 	backends map[string]string
 }
 
-func NewGRPCGateway(logger zerolog.Logger, loader *runtime.Loader, port string) *GRPCGateway {
-	g := &GRPCGateway{logger: logger, loader: loader, port: port}
+func NewGRPCGateway(logger zerolog.Logger, loader *runtime.Loader, port string, hostMap map[string]string) *GRPCGateway {
+	g := &GRPCGateway{logger: logger, loader: loader, port: port, hostMap: hostMap}
 	g.backends = g.buildGRPCBackends()
 	return g
 }
@@ -97,7 +98,7 @@ func (g *GRPCGateway) buildGRPCBackends() map[string]string {
 	out := make(map[string]string)
 	for _, rt := range g.loader.Current().Routes {
 		if rt.Protocol == "grpc" && rt.Enabled {
-			out[rt.Path] = rt.UpstreamURL
+			out[rt.Path] = proxy.RewriteTargetURL(rt.UpstreamURL, g.hostMap)
 		}
 	}
 	return out

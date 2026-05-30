@@ -34,6 +34,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 		})
 	})
 
+	
+
 	adminTokens, err := auth.NewAdminTokenManager(jwtSecret, "elitegate-admin")
 	if err != nil {
 		return nil, fmt.Errorf("create admin token manager: %w", err)
@@ -41,6 +43,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	authRepo := storage.NewAdminAuthRepo(db)
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
 	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger)
+    
+	routeRepo    := storage.NewRouteRepo(db)
+	upstreamRepo := storage.NewUpstreamRepo(db)
+ 
+	routeHandler    := handler.NewRouteHandler(routeRepo,logger)
+	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo,logger)
 
 	r.POST("/admin/login", authHandler.Login)
 	r.POST("/admin/refresh", authHandler.Refresh)
@@ -60,6 +68,15 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 			routes.POST("", createRouteHandler)
 			routes.PUT("/:id", updateRouteHandler)
 			routes.DELETE("/:id", deleteRouteHandler)
+			routes.GET("",       routeHandler.List)
+			routes.POST("",      routeHandler.Create)
+			routes.DELETE("/:id", routeHandler.Delete)
+		}
+
+		upstreams := v1.Group("/upstreams")
+		{
+			upstreams.GET("",  upstreamHandler.List)
+			upstreams.POST("", upstreamHandler.Create)
 		}
 
 		// ── Protected admin account management ────────────────────────

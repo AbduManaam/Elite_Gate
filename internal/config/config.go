@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -19,16 +20,17 @@ type LogConfig struct {
 }
 
 type ServerConfig struct {
-	Port            string `mapstructure:"port"`
-	GatewayPort     string `mapstructure:"gateway_port"`
-	AdminPort       string `mapstructure:"admin_port"`
-	AdminAPIURL     string `mapstructure:"admin_api_url"`
-	ReadTimeout     string `mapstructure:"read_timeout"`
-	WriteTimeout    string `mapstructure:"write_timeout"`
-	IdleTimeout         string `mapstructure:"idle_timeout"`
-	ShutdownTimeout     string `mapstructure:"shutdown_timeout"`
-	GRPCGatewayPort     string `mapstructure:"grpc_gateway_port"`
-	RouteReloadInterval string `mapstructure:"route_reload_interval"`
+	Port                string            `mapstructure:"port"`
+	GatewayPort         string            `mapstructure:"gateway_port"`
+	AdminPort           string            `mapstructure:"admin_port"`
+	AdminAPIURL         string            `mapstructure:"admin_api_url"`
+	ReadTimeout         string            `mapstructure:"read_timeout"`
+	WriteTimeout        string            `mapstructure:"write_timeout"`
+	IdleTimeout         string            `mapstructure:"idle_timeout"`
+	ShutdownTimeout     string            `mapstructure:"shutdown_timeout"`
+	GRPCGatewayPort     string            `mapstructure:"grpc_gateway_port"`
+	RouteReloadInterval string            `mapstructure:"route_reload_interval"`
+	DevHostMap          map[string]string `mapstructure:"dev_host_map"`
 }
 
 type DatabaseConfig struct {
@@ -114,6 +116,10 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	if hostMapRaw := os.Getenv("GATEWAY_HOST_MAP"); hostMapRaw != "" {
+		cfg.Server.DevHostMap = parseHostMap(hostMapRaw)
+	}
+
 	// 5. Validation Check
 	if cfg.Database.DSN == "" {
 		return nil, errors.New("database connection DSN (POSTGRES_DSN) is required")
@@ -151,4 +157,24 @@ func validateDuration(name, raw string) error {
 		return fmt.Errorf("%s has invalid duration %q: %w", name, raw, err)
 	}
 	return nil
+}
+
+func parseHostMap(raw string) map[string]string {
+	out := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
