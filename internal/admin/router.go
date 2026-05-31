@@ -64,12 +64,9 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	{
 		routes := v1.Group("/routes")
 		{
-			routes.GET("", listRoutesHandler)
-			routes.POST("", createRouteHandler)
-			routes.PUT("/:id", updateRouteHandler)
-			routes.DELETE("/:id", deleteRouteHandler)
-			routes.GET("",       routeHandler.List)
-			routes.POST("",      routeHandler.Create)
+			routes.GET("", routeHandler.List)
+			routes.POST("", routeHandler.Create)
+			routes.PUT("/:id", routeHandler.Update)
 			routes.DELETE("/:id", routeHandler.Delete)
 		}
 
@@ -91,18 +88,4 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	return r, nil
 }
 
-func listRoutesHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"routes": []interface{}{}})
-}
 
-func createRouteHandler(c *gin.Context) {
-	c.JSON(http.StatusCreated, gin.H{"message": "created"})
-}
-
-func updateRouteHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "updated"})
-}
-
-func deleteRouteHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
-}

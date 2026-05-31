@@ -81,6 +81,35 @@ func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
 	).Scan(&rt.ID, &rt.CreatedAt, &rt.UpdatedAt)
 }
 
+func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) error {
+	const q = `
+		UPDATE routes
+		SET path = $2, upstream_url = $3, methods = $4, protocol = $5,
+		    match_type = $6, enabled = $7, auth_required = $8,
+		    rate_limit_rpm = $9, updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, path, upstream_url, upstream_id, methods, protocol,
+		          match_type, enabled, auth_required, rate_limit_rpm,
+		          created_at, updated_at
+	`
+	var upstreamID sql.NullString
+	err := r.db.QueryRowContext(ctx, q,
+		id, rt.Path, rt.UpstreamURL, pq.Array(rt.Methods), rt.Protocol,
+		rt.MatchType, rt.Enabled, rt.AuthRequired, rt.RateLimitRPM,
+	).Scan(
+		&rt.ID, &rt.Path, &rt.UpstreamURL, &upstreamID, pq.Array(&rt.Methods),
+		&rt.Protocol, &rt.MatchType, &rt.Enabled, &rt.AuthRequired, &rt.RateLimitRPM,
+		&rt.CreatedAt, &rt.UpdatedAt,
+	)
+	if upstreamID.Valid {
+		rt.UpstreamID = &upstreamID.String
+	}
+	if err == sql.ErrNoRows {
+		return ErrRouteNotFound
+	}
+	return err
+}
+
 func (r *RouteRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM routes WHERE id = $1`, id)
 	if err != nil {

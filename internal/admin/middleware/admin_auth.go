@@ -7,6 +7,7 @@ package middleware
 // 6. Allow request to continue
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -39,10 +40,14 @@ func AdminAuth(tokens *authpkg.AdminTokenManager) gin.HandlerFunc {
 
 		claims, err := tokens.ValidateAdminAccessToken(raw)
 		if err != nil {
+			msg := "invalid token"
+			if errors.Is(err, authpkg.ErrTokenExpired) {
+				msg = "token expired"
+			}
 			c.AbortWithStatusJSON(
 				http.StatusUnauthorized,
 				gin.H{
-					"error": "invalid token",
+					"error": msg,
 				},
 			)
 			return

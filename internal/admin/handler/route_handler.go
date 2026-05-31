@@ -191,3 +191,99 @@ func (h *RouteHandler) Delete(c *gin.Context) {
 		"error": "internal server error",
 	})
 }
+
+func (h *RouteHandler) Update(c *gin.Context) {
+	id := c.Param("id")
+
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "route id is required",
+		})
+		return
+	}
+
+	var req createRouteRequest
+
+	h.logger.Info().
+		Str("route_id", id).
+		Str("method", c.Request.Method).
+		Msg("update route request received")
+
+	// Parse JSON
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Error().
+			Err(err).
+			Msg("failed to parse update request body")
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Protocol == "" {
+		req.Protocol = "http"
+	}
+	if req.MatchType == "" {
+		req.MatchType = "prefix"
+	}
+
+	// Validate protocol
+	if !validProtocols[req.Protocol] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "protocol must be 'http' or 'grpc'",
+		})
+		return
+	}
+
+	// Validate match type
+	if !validMatchTypes[req.MatchType] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "match_type must be 'exact' or 'prefix'",
+		})
+		return
+	}
+
+	rt := &model.Route{
+		Path:         req.Path,
+		UpstreamURL:  req.UpstreamURL,
+		Methods:      req.Methods,
+		Protocol:     req.Protocol,
+		MatchType:    req.MatchType,
+		Enabled:      req.Enabled,
+		AuthRequired: req.AuthRequired,
+		RateLimitRPM: req.RateLimitRPM,
+	}
+
+	h.logger.Info().
+		Str("route_id", id).
+		Str("path", rt.Path).
+		Str("upstream", rt.UpstreamURL).
+		Msg("updating route in database")
+
+	if err := h.repo.Update(c.Request.Context(), id, rt); err != nil {
+		if errors.Is(err, storage.ErrRouteNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "route not found",
+			})
+			return
+		}
+
+		h.logger.Error().
+			Err(err).
+			Str("route_id", id).
+			Msg("failed to update route")
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "internal server error",
+		})
+		return
+	}
+
+	h.logger.Info().
+		Str("route_id", rt.ID).
+		Str("path", rt.Path).
+		Msg("route updated successfully")
+
+	c.JSON(http.StatusOK, gin.H{
+		"route": rt,
+	})
+}
