@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"elitegate/internal/model"
 	"elitegate/internal/ratelimit"
 	"elitegate/internal/shared"
 )
@@ -22,6 +23,18 @@ func NewRateLimitMiddleware(limiter ratelimit.Limiter) *RateLimitMiddleware {
 
 func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var limit int
+		if rt, ok := r.Context().Value(shared.ContextKeyRoute).(*model.Route); ok && rt != nil {
+			limit = rt.RateLimitRPM
+		} else {
+			limit = rl.limiter.Limit()
+		}
+
+		if limit <= 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		clientID, _ := r.Context().Value(shared.ContextKeyClientID).(string)
 		if clientID == "" {
 			clientID = extractIP(r)
@@ -30,7 +43,6 @@ func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
 		key := fmt.Sprintf("%s:%s", clientID, r.URL.Path)
 
 		current := rl.limiter.Count(key)
-		limit := rl.limiter.Limit()
 		remaining := limit - current
 		if remaining < 0 {
 			remaining = 0
@@ -41,7 +53,7 @@ func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
 		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetAt.Unix()))
 
-		if !rl.limiter.Allow(key) {
+		if !rl.limiter.AllowWithLimit(key, limit) {
 			w.Header().Set("Retry-After", "60")
 			httpJSON(w, http.StatusTooManyRequests, map[string]any{
 				"error":       "rate limit exceeded",

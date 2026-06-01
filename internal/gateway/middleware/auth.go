@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"elitegate/internal/auth"
+	"elitegate/internal/model"
 	"elitegate/internal/shared"
 )
 
@@ -15,6 +16,12 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rt, ok := r.Context().Value(shared.ContextKeyRoute).(*model.Route)
+			if ok && rt != nil && !rt.AuthRequired {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			authHeader := r.Header.Get("Authorization")
 			if strings.HasPrefix(authHeader, "Bearer ") {
 				tokenStr := strings.TrimPrefix(authHeader, "Bearer ")

@@ -5,8 +5,9 @@ import (
 	"sync"
 
 	"elitegate/internal/gateway/proxy"
-	"elitegate/internal/gateway/router"
 	"elitegate/internal/gateway/runtime"
+	"elitegate/internal/model"
+	"elitegate/internal/shared"
 )
 
 type DynamicProxy struct {
@@ -25,9 +26,8 @@ func NewDynamicProxy(loader *runtime.Loader, hostMap map[string]string) *Dynamic
 }
 
 func (d *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	snap := d.loader.Current()
-	rt := router.MatchHTTP(r.URL.Path, snap.Routes)
-	if rt == nil {
+	rt, ok := r.Context().Value(shared.ContextKeyRoute).(*model.Route)
+	if !ok || rt == nil {
 		http.Error(w, `{"error":"route not found"}`, http.StatusNotFound)
 		return
 	}

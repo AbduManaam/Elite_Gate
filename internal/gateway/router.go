@@ -39,6 +39,7 @@ func NewRouter(
 
 	apiHandler := middleware.Chain(
 		dynamic,
+		middleware.RouteMatcher(loader),
 		middleware.IPFilter,
 		middleware.Auth(cfg.Auth.JWTSecret),
 		rlMiddleware.Middleware,

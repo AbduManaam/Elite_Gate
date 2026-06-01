@@ -33,9 +33,9 @@ func NewRedisLimiter(client *redis.Client, rpm int, fallback Limiter) *RedisLimi
 	}
 }
 
-func (r *RedisLimiter) Allow(key string) bool {
+func (r *RedisLimiter) AllowWithLimit(key string, limit int) bool {
 	if r.client == nil {
-		return r.fallback.Allow(key)
+		return r.fallback.AllowWithLimit(key, limit)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -43,13 +43,17 @@ func (r *RedisLimiter) Allow(key string) bool {
 	windowKey := fmt.Sprintf("ratelimit:%s:%d", key, time.Now().Unix()/60)
 	result, err := luaScript.Run(ctx, r.client,
 		[]string{windowKey},
-		r.requestsPerMin,
+		limit,
 		60,
 	).Int()
 	if err != nil {
-		return r.fallback.Allow(key)
+		return r.fallback.AllowWithLimit(key, limit)
 	}
-	return result <= r.requestsPerMin
+	return result <= limit
+}
+
+func (r *RedisLimiter) Allow(key string) bool {
+	return r.AllowWithLimit(key, r.requestsPerMin)
 }
 
 func (r *RedisLimiter) Count(key string) int {

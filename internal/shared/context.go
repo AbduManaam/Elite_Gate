@@ -6,4 +6,5 @@ const (
 	ContextKeyClientID  ContextKey = "clientID"
 	ContextKeyRole      ContextKey = "role"
 	ContextKeyRequestID ContextKey = "requestID"
+	ContextKeyRoute     ContextKey = "route"
 )

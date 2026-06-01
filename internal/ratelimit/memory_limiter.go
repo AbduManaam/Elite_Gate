@@ -20,7 +20,7 @@ func NewMemoryLimiter(rpm int) *MemoryLimiter {
 	}
 }
 
-func (m *MemoryLimiter) Allow(key string) bool {
+func (m *MemoryLimiter) AllowWithLimit(key string, limit int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -32,7 +32,11 @@ func (m *MemoryLimiter) Allow(key string) bool {
 	}
 
 	m.counters[key]++
-	return m.counters[key] <= m.requestsPerMin
+	return m.counters[key] <= limit
+}
+
+func (m *MemoryLimiter) Allow(key string) bool {
+	return m.AllowWithLimit(key, m.requestsPerMin)
 }
 
 func (m *MemoryLimiter) Count(key string) int {

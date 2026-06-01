@@ -11,279 +11,162 @@ import (
 )
 
 type RouteHandler struct {
-	repo *storage.RouteRepo
+	repo   *storage.RouteRepo
 	logger zerolog.Logger
 }
 
-func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger)*RouteHandler{
+func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger) *RouteHandler {
 	return &RouteHandler{
-		repo: repo,
+		repo:   repo,
 		logger: logger,
 	}
 }
 
-func(h *RouteHandler)List(c *gin.Context){
-	
-	routes,err:= h.repo.ListAll(c.Request.Context())
-	if err!=nil{
-       h.logger.Debug().
-	   Err(err).
-	   Str("handler", "ListRoutes").
-	   Msg("failed to list routes")
-
-		c.JSON(http.StatusInternalServerError,gin.H{"error": "failed to load routes"})
+func (h *RouteHandler) List(c *gin.Context) {
+	routes, err := h.repo.ListAll(c.Request.Context())
+	if err != nil {
+		h.logger.Debug().Err(err).Str("handler", "ListRoutes").Msg("failed to list routes")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load routes"})
 		return
 	}
-	c.JSON(http.StatusOK,gin.H{"routes":routes})
+	c.JSON(http.StatusOK, gin.H{"routes": routes})
 }
 
+// createRouteRequest is the API contract for creating or updating a route.
+// upstream_id and policy_id reference the normalized tables.
+// methods replaces the old TEXT[] column — each entry becomes a row in route_methods.
 type createRouteRequest struct {
-	Path         string   `json:"path" binding:"required"`
-	UpstreamURL  string   `json:"upstream_url" binding:"required"`
-	Methods      []string `json:"methods" binding:"required"`
-	Protocol     string   `json:"protocol"`
-	MatchType    string   `json:"match_type"`
-	Enabled      bool     `json:"enabled"`
-	AuthRequired bool     `json:"auth_required"`
-	RateLimitRPM int      `json:"rate_limit_rpm"`
+	Path       string   `json:"path"        binding:"required"`
+	UpstreamID string   `json:"upstream_id" binding:"required"`
+	PolicyID   string   `json:"policy_id"   binding:"required"`
+	Methods    []string `json:"methods"     binding:"required"`
+	MatchType  string   `json:"match_type"`
+	Enabled    bool     `json:"enabled"`
 }
 
-var validProtocols = map[string]bool{"http": true, "grpc": true}
 var validMatchTypes = map[string]bool{"exact": true, "prefix": true}
-
 
 func (h *RouteHandler) Create(c *gin.Context) {
 	var req createRouteRequest
 
-    h.logger.Info().
-	Str("method",c.Request.Method).
-	Str("path",c.Request.URL.Path).
-	Msg("create route request received")
+	h.logger.Info().
+		Str("method", c.Request.Method).
+		Str("path", c.Request.URL.Path).
+		Msg("create route request received")
 
-	// Parse JSON
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Error().
-			Err(err).
-			Msg("failed to parse request body")
-
+		h.logger.Error().Err(err).Msg("failed to parse request body")
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Debug: Show parsed request
-	h.logger.Info().
-		Interface("request", req).
-		Msg("request parsed successfully")
- 
-	if req.Protocol == "" {
-		req.Protocol = "http"
-	}
 	if req.MatchType == "" {
 		req.MatchType = "prefix"
 	}
- 
-		// Validate protocol
-	if !validProtocols[req.Protocol] {
-		h.logger.Warn().
-			Str("protocol", req.Protocol).
-			Msg("invalid protocol")
-
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "protocol must be 'http' or 'grpc'",
-		})
-		return
-	}
-
-	// Validate match type
 	if !validMatchTypes[req.MatchType] {
-		h.logger.Warn().
-			Str("match_type", req.MatchType).
-			Msg("invalid match type")
-
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "match_type must be 'exact' or 'prefix'",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "match_type must be 'exact' or 'prefix'"})
 		return
 	}
- 
+
 	rt := &model.Route{
-		Path:         req.Path,
-		UpstreamURL:  req.UpstreamURL,
-		Methods:      req.Methods,
-		Protocol:     req.Protocol,
-		MatchType:    req.MatchType,
-		Enabled:      req.Enabled,
-		AuthRequired: req.AuthRequired,
-		RateLimitRPM: req.RateLimitRPM,
+		Path:       req.Path,
+		UpstreamID: &req.UpstreamID,
+		PolicyID:   &req.PolicyID,
+		Methods:    req.Methods,
+		MatchType:  req.MatchType,
+		Enabled:    req.Enabled,
 	}
 
 	h.logger.Info().
 		Str("path", rt.Path).
-		Str("upstream", rt.UpstreamURL).
-		Str("protocol", rt.Protocol).
+		Str("upstream_id", req.UpstreamID).
+		Str("policy_id", req.PolicyID).
 		Msg("creating route in database")
 
-// Save to database
 	if err := h.repo.Create(c.Request.Context(), rt); err != nil {
-		h.logger.Error().
-			Err(err).
-			Str("path", rt.Path).
-			Msg("failed to create route")
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		h.logger.Error().Err(err).Str("path", rt.Path).Msg("failed to create route")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Success log
-	h.logger.Info().
-		Str("route_id", rt.ID).
-		Str("path", rt.Path).
-		Msg("route created successfully")
-
-	c.JSON(http.StatusCreated, gin.H{
-		"route": rt,
-	})
+	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route created successfully")
+	c.JSON(http.StatusCreated, gin.H{"route": rt})
 }
 
 func (h *RouteHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
-
 	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "route id is required",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "route id is required"})
 		return
 	}
 
-	h.logger.Info().
-		Str("route_id", id).
-		Msg("deleting route")
+	h.logger.Info().Str("route_id", id).Msg("deleting route")
 
 	err := h.repo.Delete(c.Request.Context(), id)
-
 	if err == nil {
-		h.logger.Info().
-			Str("route_id", id).
-			Msg("route deleted")
-
-		c.JSON(http.StatusOK, gin.H{
-			"message": "route deleted",
-			"id":      id,
-		})
+		h.logger.Info().Str("route_id", id).Msg("route deleted")
+		c.JSON(http.StatusOK, gin.H{"message": "route deleted", "id": id})
 		return
 	}
 
 	if errors.Is(err, storage.ErrRouteNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "route not found",
-		})
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
 		return
 	}
 
-	h.logger.Error().
-		Err(err).
-		Str("route_id", id).
-		Msg("failed to delete route")
-
-	c.JSON(http.StatusInternalServerError, gin.H{
-		"error": "internal server error",
-	})
+	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to delete route")
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 
 func (h *RouteHandler) Update(c *gin.Context) {
 	id := c.Param("id")
-
 	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "route id is required",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "route id is required"})
 		return
 	}
 
 	var req createRouteRequest
+	h.logger.Info().Str("route_id", id).Msg("update route request received")
 
-	h.logger.Info().
-		Str("route_id", id).
-		Str("method", c.Request.Method).
-		Msg("update route request received")
-
-	// Parse JSON
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Error().
-			Err(err).
-			Msg("failed to parse update request body")
-
+		h.logger.Error().Err(err).Msg("failed to parse update request body")
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if req.Protocol == "" {
-		req.Protocol = "http"
-	}
 	if req.MatchType == "" {
 		req.MatchType = "prefix"
 	}
-
-	// Validate protocol
-	if !validProtocols[req.Protocol] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "protocol must be 'http' or 'grpc'",
-		})
-		return
-	}
-
-	// Validate match type
 	if !validMatchTypes[req.MatchType] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "match_type must be 'exact' or 'prefix'",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "match_type must be 'exact' or 'prefix'"})
 		return
 	}
 
 	rt := &model.Route{
-		Path:         req.Path,
-		UpstreamURL:  req.UpstreamURL,
-		Methods:      req.Methods,
-		Protocol:     req.Protocol,
-		MatchType:    req.MatchType,
-		Enabled:      req.Enabled,
-		AuthRequired: req.AuthRequired,
-		RateLimitRPM: req.RateLimitRPM,
+		Path:       req.Path,
+		UpstreamID: &req.UpstreamID,
+		PolicyID:   &req.PolicyID,
+		Methods:    req.Methods,
+		MatchType:  req.MatchType,
+		Enabled:    req.Enabled,
 	}
 
 	h.logger.Info().
 		Str("route_id", id).
 		Str("path", rt.Path).
-		Str("upstream", rt.UpstreamURL).
+		Str("upstream_id", req.UpstreamID).
 		Msg("updating route in database")
 
 	if err := h.repo.Update(c.Request.Context(), id, rt); err != nil {
 		if errors.Is(err, storage.ErrRouteNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "route not found",
-			})
+			c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
 			return
 		}
-
-		h.logger.Error().
-			Err(err).
-			Str("route_id", id).
-			Msg("failed to update route")
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "internal server error",
-		})
+		h.logger.Error().Err(err).Str("route_id", id).Msg("failed to update route")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
-	h.logger.Info().
-		Str("route_id", rt.ID).
-		Str("path", rt.Path).
-		Msg("route updated successfully")
-
-	c.JSON(http.StatusOK, gin.H{
-		"route": rt,
-	})
+	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route updated successfully")
+	c.JSON(http.StatusOK, gin.H{"route": rt})
 }
