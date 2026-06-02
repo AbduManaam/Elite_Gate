@@ -50,8 +50,6 @@ func (h *UpstreamHandler) List(c *gin.Context) {
 	})
 }
 
-// validProtocols is the allowed set of backend protocols.
-// Protocol is a property of the upstream (what the backend speaks), not the route.
 var validProtocols = map[string]bool{"http": true, "grpc": true}
 
 type createUpstreamRequest struct {
