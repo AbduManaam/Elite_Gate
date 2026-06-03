@@ -1,0 +1,91 @@
+# Go build and binaries
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Go modules
+go.sum
+
+# Dependency directories
+vendor/
+
+# Go test and coverage
+*.test
+*.out
+coverage.out
+*.prof
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.classpath
+.c9/
+*.jb6
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+*.pem
+*.key
+
+# Environment and config files
+.env
+.env.local
+.env.*.local
+config/.env
+config/config.yaml.local
+
+# Logs
+logs/
+*.log
+*.logs
+
+# Build artifacts
+build/
+dist/
+*.o
+*.a
+
+# Node modules (for web/admin-ui)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json.lock
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Database and migrations
+*.db
+*.sqlite
+*.sqlite3
+migrations/*.local.sql
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Generated files
+*.pb.go
+
+# Local test files
+test-*.json
+test-*.yaml
