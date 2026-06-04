@@ -36,6 +36,7 @@ func (h *RouteHandler) List(c *gin.Context) {
 // upstream_id and policy_id reference the normalized tables.
 // methods replaces the old TEXT[] column — each entry becomes a row in route_methods.
 type createRouteRequest struct {
+	Name       string   `json:"name"        binding:"required"`
 	Path       string   `json:"path"        binding:"required"`
 	UpstreamID string   `json:"upstream_id" binding:"required"`
 	PolicyID   string   `json:"policy_id"   binding:"required"`
@@ -69,6 +70,7 @@ func (h *RouteHandler) Create(c *gin.Context) {
 	}
 
 	rt := &model.Route{
+		Name:       req.Name,
 		Path:       req.Path,
 		UpstreamID: &req.UpstreamID,
 		PolicyID:   &req.PolicyID,
@@ -143,6 +145,7 @@ func (h *RouteHandler) Update(c *gin.Context) {
 	}
 
 	rt := &model.Route{
+		Name:       req.Name,
 		Path:       req.Path,
 		UpstreamID: &req.UpstreamID,
 		PolicyID:   &req.PolicyID,

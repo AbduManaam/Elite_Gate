@@ -5,36 +5,31 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/rs/zerolog"
 
 	"elitegate/internal/model"
 )
 
 type RouteRepo struct {
-	db *sql.DB
+	BaseRepo
 }
 
-func NewRouteRepo(db *sql.DB) *RouteRepo {
-	return &RouteRepo{db: db}
+func NewRouteRepo(db *sql.DB, logger zerolog.Logger) *RouteRepo {
+	return &RouteRepo{BaseRepo{db: db, logger: logger}}
 }
 
-// listQuery is shared by ListEnabled and ListAll.
-// JOINs upstreams → target_url + protocol
-// JOINs policies  → auth_required + rate_limit_rpm
-// Subquery        → methods from route_methods table
-// COALESCE keeps backward compat with rows that still have old columns populated.
 const listQuery = `
 	SELECT
 		r.id,
+		r.project_id,
+		r.name,
 		r.path,
 		r.upstream_id,
 		COALESCE(u.target_url, '')   AS upstream_url,
 		COALESCE(u.protocol, 'http') AS protocol,
-		ARRAY(
-			SELECT rm.method
-			FROM   route_methods rm
-			WHERE  rm.route_id = r.id
-		)                            AS methods,
+		r.methods,
 		r.match_type,
 		r.enabled,
 		r.policy_id,
@@ -48,128 +43,163 @@ const listQuery = `
 `
 
 func (r *RouteRepo) ListEnabled(ctx context.Context) ([]model.Route, error) {
-	q := listQuery + `WHERE r.enabled = TRUE ORDER BY length(r.path) DESC`
-	rows, err := r.db.QueryContext(ctx, q)
+	// If no tenant context is present (e.g. gateway router loading all routes globally),
+	// we bypass the tenant transaction wrapper and query everything.
+	tc, err := TenantFromContext(ctx)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRoutes(rows)
-}
-
-func (r *RouteRepo) ListAll(ctx context.Context) ([]model.Route, error) {
-	q := listQuery + `ORDER BY r.path ASC`
-	rows, err := r.db.QueryContext(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRoutes(rows)
-}
-
-// Create inserts a new route and its methods in a single transaction.
-// Writes upstream_id + policy_id (new schema).
-// Also writes upstream_url for backward compat until migration 0008 runs.
-func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	const q = `
-		INSERT INTO routes (path, upstream_id, policy_id, match_type, enabled)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, created_at, updated_at
-	`
-	err = tx.QueryRowContext(ctx, q,
-		rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled,
-	).Scan(&rt.ID, &rt.CreatedAt, &rt.UpdatedAt)
-	if err != nil {
-		return err
+		r.logger.Trace().Msg("ListEnabled: no tenant context, listing all enabled routes globally")
+		q := listQuery + ` WHERE r.enabled = TRUE AND r.deleted_at IS NULL ORDER BY length(r.path) DESC`
+		rows, err := r.db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanRoutes(rows)
 	}
 
-	if err := insertMethods(ctx, tx, rt.ID, rt.Methods); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-// Update replaces a route's fields and rebuilds its method list atomically.
-func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	const q = `
-		UPDATE routes
-		SET    path         = $2,
-		       upstream_id  = $3,
-		       policy_id    = $4,
-		       match_type   = $5,
-		       enabled      = $6,
-		       updated_at   = NOW()
-		WHERE  id = $1
-		RETURNING id, updated_at
-	`
-	err = tx.QueryRowContext(ctx, q,
-		id, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled,
-	).Scan(&rt.ID, &rt.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return ErrRouteNotFound
-	}
-	if err != nil {
-		return err
-	}
-
-	// Rebuild method list: delete old rows, insert new ones.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM route_methods WHERE route_id = $1`, id); err != nil {
-		return err
-	}
-	if err := insertMethods(ctx, tx, id, rt.Methods); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-func (r *RouteRepo) Delete(ctx context.Context, id string) error {
-	// route_methods rows are deleted automatically via ON DELETE CASCADE.
-	res, err := r.db.ExecContext(ctx, `DELETE FROM routes WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrRouteNotFound
-	}
-	return nil
-}
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-type txExecer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-func insertMethods(ctx context.Context, tx *sql.Tx, routeID string, methods []string) error {
-	for _, m := range methods {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO route_methods (route_id, method) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			routeID, m,
-		)
+	r.logger.Debug().Str("project_id", tc.ProjectID.String()).Msg("ListEnabled: tenant context found, listing isolated enabled routes")
+	var routes []model.Route
+	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		q := listQuery + ` WHERE r.enabled = TRUE AND r.deleted_at IS NULL ORDER BY length(r.path) DESC`
+		rows, err := tx.QueryContext(ctx, q)
 		if err != nil {
 			return err
 		}
+		defer rows.Close()
+		routes, err = scanRoutes(rows)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	return routes, nil
+}
+
+func (r *RouteRepo) ListAll(ctx context.Context) ([]model.Route, error) {
+	tc, err := TenantFromContext(ctx)
+	if err != nil {
+		r.logger.Trace().Msg("ListAll: no tenant context, listing all routes globally")
+		q := listQuery + ` WHERE r.deleted_at IS NULL ORDER BY r.path ASC`
+		rows, err := r.db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanRoutes(rows)
+	}
+
+	r.logger.Debug().Str("project_id", tc.ProjectID.String()).Msg("ListAll: tenant context found, listing isolated routes")
+	var routes []model.Route
+	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		q := listQuery + ` WHERE r.deleted_at IS NULL ORDER BY r.path ASC`
+		rows, err := tx.QueryContext(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		routes, err = scanRoutes(rows)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return routes, nil
+}
+
+func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
+	r.logger.Info().Str("path", rt.Path).Msg("Create: initiating route creation")
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return err
+		}
+		rt.ProjectID = tc.ProjectID.String()
+
+		if rt.Name == "" {
+			rt.Name = "route_" + uuid.New().String()[:8]
+		}
+
+		const q = `
+			INSERT INTO routes (project_id, name, path, upstream_id, policy_id, match_type, enabled, methods)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING id, created_at, updated_at
+		`
+		return tx.QueryRowContext(ctx, q,
+			tc.ProjectID, rt.Name, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled, pq.Array(rt.Methods),
+		).Scan(&rt.ID, &rt.CreatedAt, &rt.UpdatedAt)
+	})
+
+	if err != nil {
+		r.logger.Error().Err(err).Str("path", rt.Path).Msg("Create: failed to insert route")
+		return err
+	}
+
+	r.logger.Info().Str("route_id", rt.ID).Str("project_id", rt.ProjectID).Msg("Create: route created successfully")
 	return nil
+}
+
+func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) error {
+	r.logger.Info().Str("route_id", id).Str("path", rt.Path).Msg("Update: initiating route update")
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		const q = `
+			UPDATE routes
+			SET    name         = $2,
+			       path         = $3,
+			       upstream_id  = $4,
+			       policy_id    = $5,
+			       match_type   = $6,
+			       enabled      = $7,
+			       methods      = $8,
+			       updated_at   = NOW()
+			WHERE  id = $1 AND deleted_at IS NULL
+			RETURNING id, updated_at
+		`
+		err := tx.QueryRowContext(ctx, q,
+			id, rt.Name, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled, pq.Array(rt.Methods),
+		).Scan(&rt.ID, &rt.UpdatedAt)
+		if err == sql.ErrNoRows {
+			return ErrRouteNotFound
+		}
+		return err
+	})
+
+	if err != nil {
+		r.logger.Error().Err(err).Str("route_id", id).Msg("Update: failed to update route")
+		return err
+	}
+
+	r.logger.Info().Str("route_id", id).Msg("Update: route updated successfully")
+	return nil
+}
+
+func (r *RouteRepo) Delete(ctx context.Context, id string) error {
+	r.logger.Info().Str("route_id", id).Msg("Delete: initiating route deletion")
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE routes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrRouteNotFound
+		}
+		return nil
+	})
+
+	if err != nil {
+		r.logger.Error().Err(err).Str("route_id", id).Msg("Delete: failed to delete route")
+		return err
+	}
+
+	r.logger.Info().Str("route_id", id).Msg("Delete: route deleted successfully (soft-delete)")
+	return nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
 func scanRoutes(rows *sql.Rows) ([]model.Route, error) {
@@ -190,15 +220,21 @@ func scanRoute(s rowScanner) (model.Route, error) {
 	var policyID sql.NullString
 
 	err := s.Scan(
-		&rt.ID, &rt.Path,
+		&rt.ID,
+		&rt.ProjectID,
+		&rt.Name,
+		&rt.Path,
 		&upstreamID,
 		&rt.UpstreamURL,
 		&rt.Protocol,
 		pq.Array(&rt.Methods),
-		&rt.MatchType, &rt.Enabled,
+		&rt.MatchType,
+		&rt.Enabled,
 		&policyID,
-		&rt.AuthRequired, &rt.RateLimitRPM,
-		&rt.CreatedAt, &rt.UpdatedAt,
+		&rt.AuthRequired,
+		&rt.RateLimitRPM,
+		&rt.CreatedAt,
+		&rt.UpdatedAt,
 	)
 	if upstreamID.Valid {
 		rt.UpstreamID = &upstreamID.String

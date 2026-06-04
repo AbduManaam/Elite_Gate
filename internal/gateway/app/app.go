@@ -49,7 +49,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 	}
 
 	// Setup dynamic route loader
-	routeRepo := storage.NewRouteRepo(db)
+	routeRepo := storage.NewRouteRepo(db, logger)
 	reloadInterval, err := time.ParseDuration(cfg.Server.RouteReloadInterval)
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to parse route reload interval; defaulting to 10s")

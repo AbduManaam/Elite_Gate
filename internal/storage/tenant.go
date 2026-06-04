@@ -1,5 +1,13 @@
 package storage
 
+// THIS FILE
+
+// It manages Multi-Tenant Isolation and Row-Level Security (RLS):
+
+// Context Management: Passes tenant details (ProjectID, UserID) through Go request contexts.
+// Session Security: Automatically sets app.project_id inside PostgreSQL transactions so the database can filter rows for that project only.
+// Membership Check: Validates if a user actually belongs to a project before letting them query it.
+
 import (
 	"context"
 	"database/sql"
@@ -10,18 +18,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ErrNotFound is returned when a resource does not exist in the tenant scope.
 var ErrNotFound = errors.New("resource not found")
 
-// ErrForbidden is returned when a user does not have access to a project.
 var ErrForbidden = errors.New("access denied")
 
-// TenantContext carries validated project identity through the request lifecycle.
+// A struct carrying the identity of the current project (ProjectID), the active user (UserID), and their permission role (UserRole).
 type TenantContext struct {
 	ProjectID uuid.UUID
 	UserID    uuid.UUID
 	UserRole  string
 }
+
+//---------------------------------------------------------------------------------------------------------------
+
+// WithTenantContext & TenantFromContext: Helper functions that securely store and retrieve the TenantContext to/from
+// the Go context.Context object. They use a private key type ctxKey to prevent name collisions in the context map.
 
 type ctxKey string
 
@@ -39,12 +50,25 @@ func TenantFromContext(ctx context.Context) (TenantContext, error) {
 	return tc, nil
 }
 
+//---------------------------------------------------------------------------------------------------------------
+
+// എല്ലാ repository-കൾക്കും common database functions share ചെയ്യാൻ ഉപയോഗിക്കുന്ന parent/base struct ആണ് BaseRepo.
 type BaseRepo struct {
 	db     *sql.DB
 	logger zerolog.Logger
 }
 
-// setTenantSession sets the PostgreSQL session variables used by RLS policies.
+// setTenantSession എന്ന function PostgreSQL-ൽ current transaction-നു മാത്രം valid ആയ tenant information set ചെയ്യുന്നു.
+// app.project_id = ഇപ്പോൾ ഏത് project (tenant) ആണ് access ചെയ്യുന്നത്
+// app.current_user_id = ഇപ്പോൾ ഏത് user ആണ് request ചെയ്യുന്നത്
+
+// TRUE എന്നത്:
+// ഈ value transaction കഴിയുന്നത് വരെ മാത്രം നിലനിൽക്കണം
+
+// 1.setTenantSession() project_id set ചെയ്യുന്നു
+// 2.RLS ആ value ഉപയോഗിക്കുന്നു
+// 3.User-ന് സ്വന്തം project data മാത്രം കാണാം
+
 func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID uuid.UUID, userID uuid.UUID) error {
 	r.logger.Trace().
 		Str("project_id", projectID.String()).
@@ -67,7 +91,29 @@ func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID u
 	return nil
 }
 
-// withTenantTx opens a transaction, sets the session context, executes the callback, and commits/rolls back.
+//---------------------------------------------------------------------------------------------------------------
+
+// withTenantTx Database query run ചെയ്യുന്നതിന് മുമ്പ് വേണ്ട എല്ലാ setup-ഉം ഇത് automatically ചെയ്യും.
+// Get Tenant Info from Context
+//         ↓
+// Start Transaction  =  [ഇവിടെ current project id temporary ആയി set ചെയ്ത്, request കഴിഞ്ഞാൽ automatic remove ചെയ്യാൻ ആണ്. അതുവഴി tenant data mix ആകില്ല.Transaction ഇല്ലെങ്കിൽ: connection-ൽ value remain ചെയ്യാം.]
+//         ↓
+// Set app.project_id  = by calling setTenantSession() [ഇത് RLS policies ഉപയോഗിക്കും "app.project_id, app.current_user_id"]
+//         ↓
+// Run Query   =  Invokes the query callback function fn(tx).eg- routeRepo.Create(tx, route),routeRepo.List,Update
+//         ↓
+// Success? ── Yes → Commit
+//         │
+//         No
+//         ↓
+//      Rollback
+
+// after this,the transaction ends, and PostgreSQL automatically removes those transaction-local settings.
+// bcz of setTenantSession() uses:SELECT set_config('app.project_id', 'project-123', TRUE);
+// .SELECT set_config('app.current_user_id', 'user-456', TRUE);
+// the TRUE means:
+// Set this value only for the current transaction.
+
 func (r *BaseRepo) withTenantTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
@@ -103,6 +149,11 @@ func (r *BaseRepo) withTenantTx(ctx context.Context, fn func(tx *sql.Tx) error) 
 	return nil
 }
 
+//---------------------------------------------------------------------------------------------------------------
+
+// ValidateMembership: Queries the database to verify if a user has access to a specific project. If they are
+// an active member, it returns their role (e.g., owner, editor, viewer); otherwise, it returns ErrForbidden.
+
 type MembershipRepo struct {
 	BaseRepo
 }
@@ -111,7 +162,6 @@ func NewMembershipRepo(db *sql.DB, logger zerolog.Logger) *MembershipRepo {
 	return &MembershipRepo{BaseRepo{db: db, logger: logger}}
 }
 
-// ValidateMembership verifies project-user relationship.
 func (r *MembershipRepo) ValidateMembership(ctx context.Context, projectID, userID uuid.UUID) (string, error) {
 	r.logger.Debug().
 		Str("project_id", projectID.String()).

@@ -44,7 +44,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
 	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger)
     
-	routeRepo    := storage.NewRouteRepo(db)
+	routeRepo    := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db)
  
 	routeHandler    := handler.NewRouteHandler(routeRepo,logger)
@@ -62,22 +62,23 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	v1 := r.Group("/admin/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))
 	{
-		routes := v1.Group("/routes")
+		membershipRepo := storage.NewMembershipRepo(db, logger)
+		projectGroup := v1.Group("/projects/:projectId")
+		projectGroup.Use(middleware.ProjectScope(membershipRepo))
 		{
-			routes.GET("", routeHandler.List)
-			routes.POST("", routeHandler.Create)
-			routes.PUT("/:id", routeHandler.Update)
-			routes.DELETE("/:id", routeHandler.Delete)
+			routes := projectGroup.Group("/routes")
+			{
+				routes.GET("", middleware.RBAC(middleware.RoleViewer), routeHandler.List)
+				routes.POST("", middleware.RBAC(middleware.RoleEditor), routeHandler.Create)
+				routes.PUT("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Update)
+				routes.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Delete)
+			}
+			upstreams := projectGroup.Group("/upstreams")
+			{
+				upstreams.GET("", middleware.RBAC(middleware.RoleViewer), upstreamHandler.List)
+				upstreams.POST("", middleware.RBAC(middleware.RoleEditor), upstreamHandler.Create)
+			}
 		}
-
-		upstreams := v1.Group("/upstreams")
-		{
-			upstreams.GET("",  upstreamHandler.List)
-			upstreams.POST("", upstreamHandler.Create)
-		}
-
-		// ── Protected admin account management ────────────────────────
-		// Requires a valid admin JWT. Existing admin creates new admins.
 		admins := v1.Group("/admins")
 		{
 			admins.POST("", authHandler.Register)
