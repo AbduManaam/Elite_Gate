@@ -16,7 +16,7 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U postgres -d elitegate_db"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d elitegate_db" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -30,7 +30,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      test: [ "CMD", "redis-cli", "-a", "redis_secret", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -55,12 +55,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      http-user:
-        condition: service_started
-      http-order:
-        condition: service_started
-      grpc-hello:
-        condition: service_started
+      # http-user:
+      #   condition: service_started
+      # http-order:
+      #   condition: service_started
+      # grpc-hello:
+      #   condition: service_started
     restart: unless-stopped
     networks:
       - elitegate_net
@@ -111,37 +111,11 @@ services:
     networks:
       - elitegate_net
 
-  http-user:
-    build:
-      context: ..
-      dockerfile: deploy/docker/sample-http.Dockerfile
-      args:
-        SAMPLE_CMD: ./cmd/samples/http-user
-    container_name: elitegate_http_user
-    networks:
-      - elitegate_net
 
-  http-order:
-    build:
-      context: ..
-      dockerfile: deploy/docker/sample-http.Dockerfile
-      args:
-        SAMPLE_CMD: ./cmd/samples/http-order
-    container_name: elitegate_http_order
-    networks:
-      - elitegate_net
-
-  grpc-hello:
-    build:
-      context: ..
-      dockerfile: deploy/docker/sample-grpc.Dockerfile
-    container_name: elitegate_grpc_hello
-    networks:
-      - elitegate_net
 
 volumes:
   pg_data:
 
 networks:
   elitegate_net:
-    driver: bridge    
+    driver: bridge

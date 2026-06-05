@@ -24,7 +24,6 @@ tasks:
       - build-gateway
       - build-admin
       - build-token
-      - build-testbackend
 
   build-gateway:
     desc: Build the gateway binary
@@ -44,11 +43,11 @@ tasks:
       - mkdir -p {{.BIN_DIR}}
       - go build -o {{.BIN_DIR}}/token{{exeExt}} {{.TOKEN_MAIN}}
 
-  build-testbackend:
-    desc: Build the test backend binary
-    cmds:
-      - mkdir -p {{.BIN_DIR}}
-      - go build -o {{.BIN_DIR}}/testbackend{{exeExt}} {{.TESTBACKEND}}
+  # build-testbackend:
+  #   desc: Build the test backend binary
+  #   cmds:
+  #     - mkdir -p {{.BIN_DIR}}
+  #     - go build -o {{.BIN_DIR}}/testbackend{{exeExt}} {{.TESTBACKEND}}
 
   # ── Run Tasks (Local Environment with Overrides) ──────────────────────────
   run-gateway:
@@ -79,10 +78,10 @@ tasks:
     cmds:
       - go run {{.ADMIN_MAIN}}
 
-  run-testbackend:
-    desc: Run mock upstream server
-    cmds:
-      - go run {{.TESTBACKEND}}
+  # run-testbackend:
+  #   desc: Run mock upstream server
+  #   cmds:
+  #     - go run {{.TESTBACKEND}}
 
   run-worker:
     desc: Run worker stub
