@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
@@ -56,7 +57,20 @@ func StartApp(cfg *config.Config) (*App, error) {
 		reloadInterval = 10 * time.Second
 	}
 	loader := runtime.NewLoader(routeRepo, logger, reloadInterval)
-	if err := loader.Start(context.Background()); err != nil {
+
+	loaderCtx := context.Background()
+	if cfg.Server.ProjectID != "" {
+		if projectUUID, err := uuid.Parse(cfg.Server.ProjectID); err == nil {
+			// Attach the TenantContext so the repository uses Row-Level Security (RLS)
+			tc := storage.TenantContext{ProjectID: projectUUID}
+			loaderCtx = storage.WithTenantContext(loaderCtx, tc)
+			logger.Info().Str("project_id", cfg.Server.ProjectID).Msg("Gateway running in isolated single-project mode")
+		} else {
+			logger.Error().Err(err).Str("project_id", cfg.Server.ProjectID).Msg("Invalid PROJECT_ID format; running globally")
+		}
+	}
+
+	if err := loader.Start(loaderCtx); err != nil {
 		if rdb != nil {
 			_ = rdb.Close()
 		}

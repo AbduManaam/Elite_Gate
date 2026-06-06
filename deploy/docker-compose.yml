@@ -118,4 +118,5 @@ volumes:
 
 networks:
   elitegate_net:
+    name: elitegate_net
     driver: bridge

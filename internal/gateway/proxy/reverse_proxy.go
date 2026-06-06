@@ -41,6 +41,13 @@ func New(targetURL string, hostMap map[string]string) (*ReverseProxy, error) {
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Gateway", "elitegate/1.0")
 		req.Host = target.Host
+
+		// Strip /api prefix if present so that upstreams receive clean paths (e.g. /users/1)
+		if strings.HasPrefix(req.URL.Path, "/api/") {
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api")
+		} else if req.URL.Path == "/api" {
+			req.URL.Path = "/"
+		}
 	}
 
 	// Custom error handler — prevents panic on upstream failure

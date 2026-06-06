@@ -164,6 +164,14 @@ tasks:
       - cmd: powershell -Command "Get-Content scripts/seed_routes.sql | docker exec -i elitegate_postgres psql -U postgres -d elitegate_db"
         platforms: [windows]
 
+  seed-test-projects:
+    desc: Seed database with test projects and collaborators for Postman
+    cmds:
+      - cmd: docker exec -i elitegate_postgres psql -U postgres -d elitegate_db < scripts/seed_test_projects.sql
+        platforms: [linux, darwin]
+      - cmd: powershell -Command "Get-Content scripts/seed_test_projects.sql | docker exec -i elitegate_postgres psql -U postgres -d elitegate_db"
+        platforms: [windows]
+
   # ── Utility Tasks ───────────────────────────────────────────────────────────
   token:
     desc: Generate a client JWT token
