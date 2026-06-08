@@ -89,3 +89,6 @@ temp/
 # Local test files
 test-*.json
 test-*.yaml
+
+# Exclude documentation files from git tracking
+/docs/
