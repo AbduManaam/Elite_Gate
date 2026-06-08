@@ -6,7 +6,6 @@ vars:
   GATEWAY_MAIN: ./cmd/gateway
   ADMIN_MAIN: ./cmd/admin
   TOKEN_MAIN: ./cmd/token
-  TESTBACKEND: ./cmd/testbackend
   WORKER_MAIN: ./cmd/worker
   UI_DIR: web/admin-ui
 
@@ -43,13 +42,6 @@ tasks:
       - mkdir -p {{.BIN_DIR}}
       - go build -o {{.BIN_DIR}}/token{{exeExt}} {{.TOKEN_MAIN}}
 
-  # build-testbackend:
-  #   desc: Build the test backend binary
-  #   cmds:
-  #     - mkdir -p {{.BIN_DIR}}
-  #     - go build -o {{.BIN_DIR}}/testbackend{{exeExt}} {{.TESTBACKEND}}
-
-  # ── Run Tasks (Local Environment with Overrides) ──────────────────────────
   run-gateway:
     desc: Run gateway locally against localhost databases
     env:
@@ -77,11 +69,6 @@ tasks:
       APP_ENV: development
     cmds:
       - go run {{.ADMIN_MAIN}}
-
-  # run-testbackend:
-  #   desc: Run mock upstream server
-  #   cmds:
-  #     - go run {{.TESTBACKEND}}
 
   run-worker:
     desc: Run worker stub

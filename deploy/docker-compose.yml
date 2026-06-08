@@ -55,12 +55,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # http-user:
-      #   condition: service_started
-      # http-order:
-      #   condition: service_started
-      # grpc-hello:
-      #   condition: service_started
+
     restart: unless-stopped
     networks:
       - elitegate_net
@@ -110,8 +105,6 @@ services:
 
     networks:
       - elitegate_net
-
-
 
 volumes:
   pg_data:
