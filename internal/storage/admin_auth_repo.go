@@ -5,35 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"elitegate/internal/model"
 )
-
-
-// admin_users table row
-
-type AdminUser struct {
-	ID                   string
-	Username             string
-	PasswordHash         string
-	FailedLoginAttempts  int
-	LockedUntil          sql.NullTime
-	LastLoginAt          sql.NullTime
-	CreatedAt            time.Time
-}
-
-
-// refresh_tokens table row
-
-type RefreshToken struct {
-	ID          string
-	AdminUserID string
-	TokenHash   string
-	ExpiresAt   time.Time
-	RevokedAt   sql.NullTime
-	IPAddress   sql.NullString
-	UserAgent   sql.NullString
-	CreatedAt   time.Time
-}
-
 
 // Repository object holding DB connection
 
@@ -41,20 +15,16 @@ type AdminAuthRepo struct {
 	db *sql.DB
 }
 
-
 // Constructor
-
 func NewAdminAuthRepo(db *sql.DB) *AdminAuthRepo {
 	return &AdminAuthRepo{db: db}
 }
 
-
 // Find admin user by username(Used during login)
-
 func (r *AdminAuthRepo) FindAdminUserByUsername(
 	ctx context.Context,
 	username string,
-) (*AdminUser, error) {
+) (*model.AdminUser, error) {
 
 	const q = `
 	SELECT
@@ -69,7 +39,7 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 	WHERE username = $1
 	`
 
-	var u AdminUser
+	var u model.AdminUser
 
 	err := r.db.QueryRowContext(ctx, q, username).Scan(
 		&u.ID,
@@ -95,7 +65,7 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 func (r *AdminAuthRepo) FindAdminUserByID(
 	ctx context.Context,
 	id string,
-) (*AdminUser, error) {
+) (*model.AdminUser, error) {
 	const q = `
 	SELECT
 		id,
@@ -109,7 +79,7 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 	WHERE id = $1
 	`
 
-	var u AdminUser
+	var u model.AdminUser
 
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
 		&u.ID,
@@ -158,14 +128,13 @@ func (r *AdminAuthRepo) CreateRefreshToken(
 	return err
 }
 
-
 // Find refresh token
 // Used during token refresh
 
 func (r *AdminAuthRepo) FindRefreshToken(
 	ctx context.Context,
 	tokenHash string,
-) (*RefreshToken, error) {
+) (*model.RefreshToken, error) {
 
 	const q = `
 	SELECT
@@ -181,7 +150,7 @@ func (r *AdminAuthRepo) FindRefreshToken(
 	WHERE token_hash = $1
 	`
 
-	var t RefreshToken
+	var t model.RefreshToken
 
 	err := r.db.QueryRowContext(ctx, q, tokenHash).Scan(
 		&t.ID,
@@ -205,7 +174,6 @@ func (r *AdminAuthRepo) FindRefreshToken(
 	return &t, nil
 }
 
-
 // Revoke single refresh token
 // Used during logout
 
@@ -227,7 +195,6 @@ func (r *AdminAuthRepo) RevokeRefreshToken(
 
 	return err
 }
-
 
 // Rotate refresh token securely
 // Old token revoked
@@ -299,7 +266,6 @@ func (r *AdminAuthRepo) RotateRefreshToken(
 	return tx.Commit()
 }
 
-
 // Delete expired / old revoked tokens
 
 func (r *AdminAuthRepo) PruneExpiredTokens(
@@ -317,7 +283,6 @@ func (r *AdminAuthRepo) PruneExpiredTokens(
 
 	return err
 }
-
 
 // Reset failed login attempts after successful login
 
@@ -342,7 +307,6 @@ func (r *AdminAuthRepo) UpdateAdminLoginSuccess(
 	return err
 }
 
-
 // Increase failed login attempts
 
 func (r *AdminAuthRepo) IncrementAdminLoginFailure(
@@ -363,7 +327,6 @@ func (r *AdminAuthRepo) IncrementAdminLoginFailure(
 
 	return err
 }
-
 
 // Lock account until specific time
 
@@ -387,7 +350,6 @@ func (r *AdminAuthRepo) LockAdminUser(
 	return err
 }
 
-
 // AdminUserCount returns the total number of admin users in the system.
 // Used by the register endpoint to detect first-run (bootstrap) mode.
 
@@ -397,7 +359,6 @@ func (r *AdminAuthRepo) AdminUserCount(ctx context.Context) (int, error) {
 	return count, err
 }
 
-
 // CreateAdminUser inserts a new admin user with a pre-hashed password.
 // Returns sql.ErrNoRows if the username is already taken (ON CONFLICT DO NOTHING).
 
@@ -405,7 +366,7 @@ func (r *AdminAuthRepo) CreateAdminUser(
 	ctx context.Context,
 	username string,
 	passwordHash string,
-) (*AdminUser, error) {
+) (*model.AdminUser, error) {
 
 	const q = `
 	INSERT INTO admin_users (username, password_hash)
@@ -415,7 +376,7 @@ func (r *AdminAuthRepo) CreateAdminUser(
 	          locked_until, last_login_at, created_at
 	`
 
-	var u AdminUser
+	var u model.AdminUser
 	err := r.db.QueryRowContext(ctx, q, username, passwordHash).Scan(
 		&u.ID,
 		&u.Username,
@@ -435,7 +396,6 @@ func (r *AdminAuthRepo) CreateAdminUser(
 
 	return &u, nil
 }
-
 
 // Convert string → sql.NullString
 // Used for nullable DB fields

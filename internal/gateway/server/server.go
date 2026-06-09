@@ -22,7 +22,9 @@ type Server struct {
 	shutdownTimeout time.Duration
 }
 
-// HTTP, gRPC gatewayകൾ setup ചെയ്യുന്നു. DevHostMap Docker service പേരുകൾ localhost-ലേക്ക് മാറ്റി, local machine-ൽ run ചെയ്യുന്ന services gateway-ക്ക് കണ്ടെത്താൻ സഹായിക്കുന്നു.
+// Sets up the HTTP and gRPC gateways.
+// DevHostMap converts Docker service names to localhost,
+// helping the gateway find services that are running on the local machine.
 
 func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig, loader *runtime.Loader) (*Server, error) {
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
@@ -65,7 +67,7 @@ func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg con
 // Run starts the server and blocks until a shutdown signal is received.
 func (s *Server) Run() error {
 
-	//  1. Start listening in background 
+	//  1. Start listening in background
 	errCh := make(chan error, 1)
 	go func() {
 		s.logger.Info().Str("addr", s.http.Addr).Msg("gateway listening")
@@ -75,7 +77,7 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	//  2. Block until OS signal 
+	//  2. Block until OS signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -100,7 +102,7 @@ func (s *Server) Run() error {
 	s.logger.Info().Str("signal", sig.String()).Msg("shutdown signal received")
 	cancel() // Stop gRPC server
 
-	//  3. Graceful shutdown (30s timeout) 
+	//  3. Graceful shutdown (30s timeout)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer shutdownCancel()
 

@@ -18,6 +18,33 @@ const (
 	RoleOwner  Role = "owner"
 )
 
+// This middleware ensures that a logged-in user can only access projects they are members of.
+// Incoming Request (e.g., GET /admin/v1/projects/project-123/routes)
+//    │
+//    ▼
+// [Check 1] Extract project ID from the URL parameter ("project-123")
+//    │
+//    ▼
+// [Check 2] Get the logged-in user's ID from the session context
+//    │
+//    ▼
+// [Check 3] Query Database: Is this user a member of "project-123"?
+//    ├── No  ──▶ Abort with "403 Access Denied to Project"
+//    └── Yes ──▶ Get user's role (owner, editor, or viewer)
+//          │
+//          ▼
+// [Check 4] Set TenantContext containing (ProjectID, UserID, UserRole)
+//          │
+//          ▼
+// [Action] Attach context to Go's Request Context (this triggers Postgres RLS)
+//          │
+//          ▼
+//        c.Next() (Move to next middleware / handler)
+
+// By injecting the TenantContext into the Go request context, this middleware works directly
+// with your database storage repositories (withTenantTx). This ensures that PostgreSQL Row-Level Security (RLS)
+// restricts queries to only return data belonging to that specific project_id.
+
 func ProjectScope(membershipRepo *storage.MembershipRepo) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectIDStr := c.Param("projectId")
@@ -73,6 +100,8 @@ func ProjectScope(membershipRepo *storage.MembershipRepo) gin.HandlerFunc {
 	}
 }
 
+// Once we know the user is allowed to access the project, the RBAC middleware
+// ensures they have the correct permissions for the action they are trying to perform.
 func RBAC(minRole Role) gin.HandlerFunc {
 	roleWeights := map[string]int{
 		"viewer": 0,

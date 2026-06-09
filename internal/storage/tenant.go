@@ -52,22 +52,27 @@ func TenantFromContext(ctx context.Context) (TenantContext, error) {
 
 //---------------------------------------------------------------------------------------------------------------
 
-// എല്ലാ repository-കൾക്കും common database functions share ചെയ്യാൻ ഉപയോഗിക്കുന്ന parent/base struct ആണ് BaseRepo.
+// BaseRepo contains common database functions
+// used by all repositories.
+
 type BaseRepo struct {
 	db     *sql.DB
 	logger zerolog.Logger
 }
 
-// setTenantSession എന്ന function PostgreSQL-ൽ current transaction-നു മാത്രം valid ആയ tenant information set ചെയ്യുന്നു.
-// app.project_id = ഇപ്പോൾ ഏത് project (tenant) ആണ് access ചെയ്യുന്നത്
-// app.current_user_id = ഇപ്പോൾ ഏത് user ആണ് request ചെയ്യുന്നത്
-
-// TRUE എന്നത്:
-// ഈ value transaction കഴിയുന്നത് വരെ മാത്രം നിലനിൽക്കണം
-
-// 1.setTenantSession() project_id set ചെയ്യുന്നു
-// 2.RLS ആ value ഉപയോഗിക്കുന്നു
-// 3.User-ന് സ്വന്തം project data മാത്രം കാണാം
+// setTenantSession sets tenant information in PostgreSQL
+// for the current transaction only.
+//
+// app.project_id      = which project (tenant) is being accessed
+// app.current_user_id = which user is making the request
+//
+// TRUE means the value exists only for the current transaction
+// and is automatically removed when the transaction ends.
+//
+// Flow:
+// 1. setTenantSession() sets app.project_id
+// 2. RLS policies use that value
+// 3. The user can access only data from their own project
 
 func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID uuid.UUID, userID uuid.UUID) error {
 	r.logger.Trace().
@@ -93,20 +98,28 @@ func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID u
 
 //---------------------------------------------------------------------------------------------------------------
 
-// withTenantTx Database query run ചെയ്യുന്നതിന് മുമ്പ് വേണ്ട എല്ലാ setup-ഉം ഇത് automatically ചെയ്യും.
-// Get Tenant Info from Context
+// withTenantTx automatically performs all required setup before running a database query.
+//
+// Get tenant information from the context
 //         ↓
-// Start Transaction  =  [ഇവിടെ current project id temporary ആയി set ചെയ്ത്, request കഴിഞ്ഞാൽ automatic remove ചെയ്യാൻ ആണ്. അതുവഴി tenant data mix ആകില്ല.Transaction ഇല്ലെങ്കിൽ: connection-ൽ value remain ചെയ്യാം.]
+// Start a transaction
 //         ↓
-// Set app.project_id  = by calling setTenantSession() [ഇത് RLS policies ഉപയോഗിക്കും "app.project_id, app.current_user_id"]
+// Temporarily set the current project ID on the database session.
+// It is automatically cleared when the request finishes, preventing
+// data from different tenants from mixing. Without a transaction,
+// the value could remain on the connection.
 //         ↓
-// Run Query   =  Invokes the query callback function fn(tx).eg- routeRepo.Create(tx, route),routeRepo.List,Update
+// Set app.project_id by calling setTenantSession()
+// RLS policies use values such as app.project_id and app.current_user_id.
 //         ↓
-// Success? ── Yes → Commit
+// Run the query by calling the callback function fn(tx)
+// Examples: routeRepo.Create(tx, route), routeRepo.List(), routeRepo.Update()
+//         ↓
+// Success? ── Yes → Commit transaction
 //         │
 //         No
 //         ↓
-//      Rollback
+//      Rollback transaction
 
 // after this,the transaction ends, and PostgreSQL automatically removes those transaction-local settings.
 // bcz of setTenantSession() uses:SELECT set_config('app.project_id', 'project-123', TRUE);
