@@ -20,6 +20,14 @@ type App struct {
 	DB     *sql.DB
 }
 
+// StartApp initializes the admin application and all required dependencies.
+//
+// It creates the log directory, configures logging, connects to PostgreSQL,
+// builds the admin router, resolves the server port, and creates the HTTP server.
+// If any setup step fails, it cleans up resources and returns an error.
+//
+// Returns a fully configured App instance containing the logger,
+// database connection, and server.
 func StartApp(cfg *config.Config) (*App, error) {
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)

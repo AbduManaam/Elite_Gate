@@ -20,6 +20,16 @@ type Server struct {
 	shutdownTimeout time.Duration
 }
 
+/*
+NewServer():  function validates the server timeout settings, creates an HTTP server with those settings, and returns the ready-to-use server instance.
+
+1.Reads timeout values from the config (ReadTimeout, WriteTimeout, IdleTimeout, ShutdownTimeout).
+2.Converts those string values (such as "5s" or "30s") into Go time.Duration values using time.ParseDuration().
+3.If any timeout value is invalid, it immediately returns an error explaining which timeout failed to parse.
+4.Creates a new Server struct.
+5.Stores:  Stores the logger and shutdown timeout, then creates an http.Server with the port, handler, and timeout settings.
+6.Returns the configured server.
+*/
 func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig) (*Server, error) {
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
 	if err != nil {

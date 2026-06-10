@@ -15,7 +15,7 @@ log:
   file: "logs/gateway.log"
   max_size_mb: 50         # rotate after 50 MB
   max_backups: 7          # keep 7 old files
-  max_age_days: 30        # delete files older than 30 days
+  max_age_days: 10        # delete files older than 10 days
 
 database:
   max_open_conns: 25

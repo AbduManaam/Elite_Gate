@@ -17,6 +17,7 @@ func NewLogger(cfg config.LogConfig) zerolog.Logger {
 	return NewServiceLogger(cfg, "elitegate-gateway")
 }
 
+// "Wiring Zerolog + Lumberjack Together"
 // NewServiceLogger builds and returns a zerolog.Logger for one service.
 // Caller stores it on the App struct; no global state is required.
 func NewServiceLogger(cfg config.LogConfig, service string) zerolog.Logger {

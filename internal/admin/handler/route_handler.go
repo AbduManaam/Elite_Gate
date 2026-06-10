@@ -15,6 +15,7 @@ type RouteHandler struct {
 	logger zerolog.Logger
 }
 
+// Receive route-related HTTP requests, call the repository to perform database operations, and return HTTP responses.
 func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger) *RouteHandler {
 	return &RouteHandler{
 		repo:   repo,
@@ -173,8 +174,3 @@ func (h *RouteHandler) Update(c *gin.Context) {
 	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route updated successfully")
 	c.JSON(http.StatusOK, gin.H{"route": rt})
 }
-
-
-
-
-
