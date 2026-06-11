@@ -19,7 +19,6 @@ import (
 )
 
 var ErrNotFound = errors.New("resource not found")
-
 var ErrForbidden = errors.New("access denied")
 
 // A struct carrying the identity of the current project (ProjectID), the active user (UserID), and their permission role (UserRole).
@@ -60,20 +59,19 @@ type BaseRepo struct {
 	logger zerolog.Logger
 }
 
-// setTenantSession sets tenant information in PostgreSQL
-// for the current transaction only.
-//
-// app.project_id      = which project (tenant) is being accessed
-// app.current_user_id = which user is making the request
-//
-// TRUE means the value exists only for the current transaction
-// and is automatically removed when the transaction ends.
-//
-// Flow:
-// 1. setTenantSession() sets app.project_id
-// 2. RLS policies use that value
-// 3. The user can access only data from their own project
+/*setTenantSession sets tenant information in PostgreSQL
+for the current transaction only.
 
+app.project_id      = which project (tenant) is being accessed
+app.current_user_id = which user is making the request
+
+TRUE means the value exists only for the current transaction
+and is automatically removed when the transaction ends.
+
+Flow:
+1. setTenantSession() sets app.project_id
+2. RLS policies use that value
+3. The user can access only data from their own project*/
 func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID uuid.UUID, userID uuid.UUID) error {
 	r.logger.Trace().
 		Str("project_id", projectID.String()).
@@ -97,36 +95,35 @@ func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID u
 }
 
 //---------------------------------------------------------------------------------------------------------------
+/*
+withTenantTx automatically performs all required setup before running a database query.
 
-// withTenantTx automatically performs all required setup before running a database query.
-//
-// Get tenant information from the context
-//         ↓
-// Start a transaction
-//         ↓
-// Temporarily set the current project ID on the database session.
-// It is automatically cleared when the request finishes, preventing
-// data from different tenants from mixing. Without a transaction,
-// the value could remain on the connection.
-//         ↓
-// Set app.project_id by calling setTenantSession()
-// RLS policies use values such as app.project_id and app.current_user_id.
-//         ↓
-// Run the query by calling the callback function fn(tx)
-// Examples: routeRepo.Create(tx, route), routeRepo.List(), routeRepo.Update()
-//         ↓
-// Success? ── Yes → Commit transaction
-//         │
-//         No
-//         ↓
-//      Rollback transaction
+Get tenant information from the context
+        ↓
+Start a transaction
+        ↓
+Temporarily set the current project ID on the database session.
+It is automatically cleared when the request finishes, preventing
+data from different tenants from mixing. Without a transaction,
+the value could remain on the connection.
+        ↓
+Set app.project_id by calling setTenantSession()
+RLS policies use values such as app.project_id and app.current_user_id.
+        ↓
+Run the query by calling the callback function fn(tx)
+Examples: routeRepo.Create(tx, route), routeRepo.List(), routeRepo.Update()
+        ↓
+Success? ── Yes → Commit transaction
+        │
+        No
+        ↓
+     Rollback transaction
 
-// after this,the transaction ends, and PostgreSQL automatically removes those transaction-local settings.
-// bcz of setTenantSession() uses:SELECT set_config('app.project_id', 'project-123', TRUE);
-// .SELECT set_config('app.current_user_id', 'user-456', TRUE);
-// the TRUE means:
-// Set this value only for the current transaction.
-
+after this,the transaction ends, and PostgreSQL automatically removes those transaction-local settings.
+bcz of setTenantSession() uses:SELECT set_config('app.project_id', 'project-123', TRUE);
+.SELECT set_config('app.current_user_id', 'user-456', TRUE);
+the TRUE means:
+Set this value only for the current transaction.*/
 func (r *BaseRepo) withTenantTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
