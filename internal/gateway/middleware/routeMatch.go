@@ -21,7 +21,9 @@ func RouteMatcher(loader *runtime.Loader) MiddlewareFunc {
 				return
 			}
 
+			// Stores the matched route object (rt) inside the context with a specific key
 			ctx := context.WithValue(r.Context(), shared.ContextKeyRoute, rt)
+			//  Updates the HTTP request to carry this new context, and forwards it
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -369,8 +369,8 @@ func (r *AdminAuthRepo) CreateAdminUser(
 ) (*model.AdminUser, error) {
 
 	const q = `
-	INSERT INTO admin_users (username, password_hash)
-	VALUES ($1, $2)
+	INSERT INTO admin_users (username, password_hash, email)
+	VALUES ($1, $2, $1 || '@elitegate.local')
 	ON CONFLICT (username) DO NOTHING
 	RETURNING id, username, password_hash, failed_login_attempts,
 	          locked_until, last_login_at, created_at
