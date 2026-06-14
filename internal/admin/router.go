@@ -46,11 +46,13 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
 	policyRepo := storage.NewPolicyRepo(db)
+	projectRepo := storage.NewProjectRepo(db)
 
 	// Handlers initialized in correct order
 	routeHandler := handler.NewRouteHandler(routeRepo, logger)
 	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger)
 	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger)
+	projectHandler := handler.NewProjectHandler(projectRepo, logger)
 
 	r.POST("/admin/login", authHandler.Login)
 	r.POST("/admin/refresh", authHandler.Refresh)
@@ -66,6 +68,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	{
 		membershipRepo := storage.NewMembershipRepo(db, logger)
 		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger)
+
+		// Project Management
+		v1.POST("/projects", projectHandler.Create)
+		v1.GET("/projects", projectHandler.List)
+		v1.PUT("/projects/:projectId", projectHandler.Update)
+		v1.DELETE("/projects/:projectId", projectHandler.Delete)
 
 		projectGroup := v1.Group("/projects/:projectId")
 		projectGroup.Use(middleware.ProjectScope(membershipRepo))

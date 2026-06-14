@@ -50,6 +50,7 @@ func (l *Loader) loop(ctx context.Context) {
 	}
 }
 
+// Reloads routes from the database and updates the cache.
 func (l *Loader) reload(ctx context.Context) error {
 	routes, err := l.repo.ListEnabled(ctx)
 	if err != nil {
@@ -66,4 +67,9 @@ func (l *Loader) Current() Snapshot {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.snapshot
+}
+
+// Public wrapper for triggering a route cache reload.
+func (l *Loader) Reload(ctx context.Context) error {
+	return l.reload(ctx)
 }
