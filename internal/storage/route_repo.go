@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -75,6 +76,30 @@ func (r *RouteRepo) ListEnabled(ctx context.Context) ([]model.Route, error) {
 	return routes, nil
 }
 
+func (r *RouteRepo) GetByID(ctx context.Context, id string) (*model.Route, error) {
+	var rt model.Route
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		q := listQuery + ` WHERE r.id = $1 AND r.project_id = $2 AND r.deleted_at IS NULL`
+		row := tx.QueryRowContext(ctx, q, id, tc.ProjectID)
+		rt, err = scanRoute(row)
+		return err
+	})
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrRouteNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetByID route %s: %w", id, err)
+	}
+
+	return &rt, nil
+}
 func (r *RouteRepo) ListAll(ctx context.Context) ([]model.Route, error) {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {

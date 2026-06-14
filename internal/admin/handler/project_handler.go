@@ -144,12 +144,10 @@ func (h *ProjectHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"project": p})
 }
 
-// Delete handles DELETE /admin/v1/projects/:projectId
 func (h *ProjectHandler) Delete(c *gin.Context) {
 	id := c.Param("projectId")
 
 	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
-		// Project does not exist — expected case, no log needed
 		if errors.Is(err, storage.ErrProjectNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
 			return

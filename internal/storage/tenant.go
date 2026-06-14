@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -20,12 +21,23 @@ import (
 
 var ErrNotFound = errors.New("resource not found")
 var ErrForbidden = errors.New("access denied")
+var ErrAlreadyMember = errors.New("user is already a member of this project")
+var ErrLastOwner = errors.New("cannot remove or demote the last owner of the project")
 
 // A struct carrying the identity of the current project (ProjectID), the active user (UserID), and their permission role (UserRole).
 type TenantContext struct {
 	ProjectID uuid.UUID
 	UserID    uuid.UUID
 	UserRole  string
+}
+
+type ProjectMember struct {
+	ProjectID   uuid.UUID `json:"project_id"`
+	AdminUserID uuid.UUID `json:"admin_user_id"`
+	Username    string    `json:"username"`
+	Email       string    `json:"email"`
+	Role        string    `json:"role"`
+	JoinedAt    time.Time `json:"joined_at"`
 }
 
 //---------------------------------------------------------------------------------------------------------------
