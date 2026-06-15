@@ -51,9 +51,10 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at      TIMESTAMPTZ,
-    CONSTRAINT projects_slug_unique UNIQUE (slug),
     CONSTRAINT projects_slug_format CHECK (slug ~ '^[a-z0-9][a-z0-9\-]{1,62}[a-z0-9]$')
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS projects_slug_active_unique ON projects (slug) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS project_members (
     project_id      UUID        NOT NULL REFERENCES projects(id)     ON DELETE CASCADE,

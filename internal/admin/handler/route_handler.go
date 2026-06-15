@@ -40,7 +40,7 @@ type createRouteRequest struct {
 	Name       string   `json:"name"        binding:"required"`
 	Path       string   `json:"path"        binding:"required"`
 	UpstreamID string   `json:"upstream_id" binding:"required"`
-	PolicyID   string   `json:"policy_id"   binding:"required"`
+	PolicyID   *string  `json:"policy_id"`
 	Methods    []string `json:"methods"     binding:"required"`
 	MatchType  string   `json:"match_type"`
 	Enabled    bool     `json:"enabled"`
@@ -70,11 +70,18 @@ func (h *RouteHandler) Create(c *gin.Context) {
 		return
 	}
 
+	var policyID *string
+	var policyIDStr string
+	if req.PolicyID != nil && *req.PolicyID != "" {
+		policyID = req.PolicyID
+		policyIDStr = *req.PolicyID
+	}
+
 	rt := &model.Route{
 		Name:       req.Name,
 		Path:       req.Path,
 		UpstreamID: &req.UpstreamID,
-		PolicyID:   &req.PolicyID,
+		PolicyID:   policyID,
 		Methods:    req.Methods,
 		MatchType:  req.MatchType,
 		Enabled:    req.Enabled,
@@ -83,7 +90,7 @@ func (h *RouteHandler) Create(c *gin.Context) {
 	h.logger.Info().
 		Str("path", rt.Path).
 		Str("upstream_id", req.UpstreamID).
-		Str("policy_id", req.PolicyID).
+		Str("policy_id", policyIDStr).
 		Msg("creating route in database")
 
 	if err := h.repo.Create(c.Request.Context(), rt); err != nil {
@@ -145,11 +152,16 @@ func (h *RouteHandler) Update(c *gin.Context) {
 		return
 	}
 
+	var policyID *string
+	if req.PolicyID != nil && *req.PolicyID != "" {
+		policyID = req.PolicyID
+	}
+
 	rt := &model.Route{
 		Name:       req.Name,
 		Path:       req.Path,
 		UpstreamID: &req.UpstreamID,
-		PolicyID:   &req.PolicyID,
+		PolicyID:   policyID,
 		Methods:    req.Methods,
 		MatchType:  req.MatchType,
 		Enabled:    req.Enabled,
@@ -174,3 +186,29 @@ func (h *RouteHandler) Update(c *gin.Context) {
 	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route updated successfully")
 	c.JSON(http.StatusOK, gin.H{"route": rt})
 }
+
+func (h *RouteHandler) Disable(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "route id is required"})
+		return
+	}
+
+	h.logger.Info().Str("route_id", id).Msg("disabling route")
+
+	err := h.repo.Disable(c.Request.Context(), id)
+	if err == nil {
+		h.logger.Info().Str("route_id", id).Msg("route disabled successfully")
+		c.JSON(http.StatusOK, gin.H{"message": "route disabled", "id": id})
+		return
+	}
+
+	if errors.Is(err, storage.ErrRouteNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
+		return
+	}
+
+	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to disable route")
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+}
+

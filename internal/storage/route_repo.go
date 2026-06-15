@@ -270,4 +270,41 @@ func scanRoute(s rowScanner) (model.Route, error) {
 	return rt, err
 }
 
+func (r *RouteRepo) Disable(ctx context.Context, id string) error {
+	r.logger.Info().Str("route_id", id).Msg("Disable: initiating route disabling")
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		const q = `
+			UPDATE routes
+			SET    enabled    = FALSE,
+			       updated_at = NOW()
+			WHERE  id = $1
+			  AND  project_id = $2
+			  AND  deleted_at IS NULL
+		`
+		res, err := tx.ExecContext(ctx, q, id, tc.ProjectID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrRouteNotFound
+		}
+		return nil
+	})
+
+	if err != nil {
+		r.logger.Error().Err(err).Str("route_id", id).Msg("Disable: failed to disable route")
+		return err
+	}
+
+	r.logger.Info().Str("route_id", id).Msg("Disable: route disabled successfully")
+	return nil
+}
+
 var ErrRouteNotFound = errors.New("route not found")

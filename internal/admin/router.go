@@ -46,7 +46,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
 	policyRepo := storage.NewPolicyRepo(db)
-	projectRepo := storage.NewProjectRepo(db)
+	projectRepo := storage.NewProjectRepo(db, logger)
 
 	// Handlers initialized in correct order
 	routeHandler := handler.NewRouteHandler(routeRepo, logger)
@@ -83,6 +83,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 				routes.GET("", middleware.RBAC(middleware.RoleViewer), routeHandler.List)
 				routes.POST("", middleware.RBAC(middleware.RoleEditor), routeHandler.Create)
 				routes.PUT("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Update)
+				routes.PATCH("/:id/disable", middleware.RBAC(middleware.RoleEditor), routeHandler.Disable)
 				routes.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Delete)
 				routes.POST("/:id/policy", middleware.RBAC(middleware.RoleEditor), policyHandler.AssignPolicy)
 				routes.DELETE("/:id/policy", middleware.RBAC(middleware.RoleEditor), policyHandler.RemovePolicy)

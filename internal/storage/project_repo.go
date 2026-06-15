@@ -25,15 +25,14 @@ func NewProjectRepo(db *sql.DB, logger zerolog.Logger) *ProjectRepo {
 	return &ProjectRepo{BaseRepo{db: db, logger: logger}}
 }
 
-// isUniqueViolation checks if the error is a PostgreSQL unique constraint violation (code 23505). It returns true if the database error is caused by a duplicate entry.
+// Returns true if a duplicate entry already exists.
 func isUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
-// Create inserts a new project and automatically assigns the creator as owner.
-// Both operations run in a single transaction — if membership insert fails,
-// the project insert is also rolled back.
+// Create a project and assign the creator as its owner.
+// Both operations run in a single transaction.
 func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	r.logger.Info().Str("slug", p.Slug).Msg("Create: initiating project creation")
 
@@ -90,7 +89,7 @@ func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	return nil
 }
 
-// ListForUser returns all projects that the given user is a member of.
+// List all projects for a user.
 func (r *ProjectRepo) ListForUser(ctx context.Context, userID string) ([]model.Project, error) {
 	r.logger.Debug().Str("user_id", userID).Msg("ListForUser: fetching user projects")
 
@@ -145,7 +144,8 @@ func (r *ProjectRepo) ListForUser(ctx context.Context, userID string) ([]model.P
 	return projects, nil
 }
 
-// Updates a project's editable fields; returns ErrProjectNotFound if the project is missing or soft-deleted.
+// Update a project's details.
+// Returns ErrProjectNotFound if the project does not exist.
 func (r *ProjectRepo) Update(ctx context.Context, id string, p *model.Project) error {
 	r.logger.Info().Str("project_id", id).Msg("Update: initiating project update")
 
@@ -177,9 +177,8 @@ func (r *ProjectRepo) Update(ctx context.Context, id string, p *model.Project) e
 	return nil
 }
 
-// This function removes a project by "soft-deleting" it. It also automatically hides all related items like API keys and
-//
-//	routes within the same transaction, ensuring no "orphaned" (active but disconnected) resources are left behind.
+// Soft-delete a project, API keys, and routes.
+// Keeps related data consistent.
 func (r *ProjectRepo) Delete(ctx context.Context, id string) error {
 	r.logger.Info().Str("project_id", id).Msg("Delete: initiating project deletion with cascades")
 

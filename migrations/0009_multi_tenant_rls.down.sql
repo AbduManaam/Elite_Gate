@@ -26,6 +26,7 @@ DROP FUNCTION IF EXISTS current_project_id();
 
 -- 3. DROP PERFORMANCE INDEXES
 
+DROP INDEX IF EXISTS projects_slug_active_unique;
 DROP INDEX IF EXISTS idx_policies_project_id;
 DROP INDEX IF EXISTS idx_upstreams_project_id;
 DROP INDEX IF EXISTS idx_routes_project_path;

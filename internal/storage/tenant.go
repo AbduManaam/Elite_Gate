@@ -23,6 +23,7 @@ var ErrNotFound = errors.New("resource not found")
 var ErrForbidden = errors.New("access denied")
 var ErrAlreadyMember = errors.New("user is already a member of this project")
 var ErrLastOwner = errors.New("cannot remove or demote the last owner of the project")
+var ErrIsProjectOwner = errors.New("cannot remove the project owner; transfer ownership first")
 
 // A struct carrying the identity of the current project (ProjectID), the active user (UserID), and their permission role (UserRole).
 type TenantContext struct {
@@ -223,4 +224,141 @@ func (r *MembershipRepo) ValidateMembership(ctx context.Context, projectID, user
 		Str("role", role).
 		Msg("membership validation successful")
 	return role, nil
+}
+
+func (r *MembershipRepo) AddMember(ctx context.Context, projectID, userID uuid.UUID, role string, inviterID uuid.UUID) error {
+	// Check if already a member
+	var exists int
+	err := r.db.QueryRowContext(ctx, `SELECT 1 FROM project_members WHERE project_id = $1 AND admin_user_id = $2`, projectID, userID).Scan(&exists)
+	if err == nil {
+		return ErrAlreadyMember
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check membership: %w", err)
+	}
+
+	// Insert member
+	const q = `
+		INSERT INTO project_members (project_id, admin_user_id, role, invited_by, joined_at)
+		VALUES ($1, $2, $3, $4, NOW())
+	`
+	_, err = r.db.ExecContext(ctx, q, projectID, userID, role, inviterID)
+	if err != nil {
+		return fmt.Errorf("insert project member: %w", err)
+	}
+	return nil
+}
+
+func (r *MembershipRepo) UpdateRole(ctx context.Context, projectID, memberID uuid.UUID, role string) error {
+	var currentRole string
+	err := r.db.QueryRowContext(ctx, `SELECT role FROM project_members WHERE project_id = $1 AND admin_user_id = $2`, projectID, memberID).Scan(&currentRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get member role: %w", err)
+	}
+
+	if currentRole == role {
+		return nil
+	}
+
+	if currentRole == "owner" && role != "owner" {
+		var ownerCount int
+		err = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND role = 'owner'`, projectID).Scan(&ownerCount)
+		if err != nil {
+			return fmt.Errorf("count project owners: %w", err)
+		}
+		if ownerCount <= 1 {
+			return ErrLastOwner
+		}
+	}
+
+	const q = `
+		UPDATE project_members
+		SET    role = $3
+		WHERE  project_id = $1 AND admin_user_id = $2
+	`
+	res, err := r.db.ExecContext(ctx, q, projectID, memberID, role)
+	if err != nil {
+		return fmt.Errorf("update member role: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *MembershipRepo) RemoveMember(ctx context.Context, projectID, memberID uuid.UUID) error {
+	var ownerID uuid.UUID
+	err := r.db.QueryRowContext(ctx, `SELECT owner_id FROM projects WHERE id = $1`, projectID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get project owner: %w", err)
+	}
+	if ownerID == memberID {
+		return ErrIsProjectOwner
+	}
+
+	var currentRole string
+	err = r.db.QueryRowContext(ctx, `SELECT role FROM project_members WHERE project_id = $1 AND admin_user_id = $2`, projectID, memberID).Scan(&currentRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get member role: %w", err)
+	}
+
+	if currentRole == "owner" {
+		var ownerCount int
+		err = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND role = 'owner'`, projectID).Scan(&ownerCount)
+		if err != nil {
+			return fmt.Errorf("count project owners: %w", err)
+		}
+		if ownerCount <= 1 {
+			return ErrLastOwner
+		}
+	}
+
+	res, err := r.db.ExecContext(ctx, `DELETE FROM project_members WHERE project_id = $1 AND admin_user_id = $2`, projectID, memberID)
+	if err != nil {
+		return fmt.Errorf("delete member: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID) ([]ProjectMember, error) {
+	const q = `
+		SELECT pm.project_id, pm.admin_user_id, au.username, au.email, pm.role, pm.joined_at
+		FROM   project_members pm
+		JOIN   admin_users      au ON au.id = pm.admin_user_id
+		WHERE  pm.project_id = $1
+		  AND  au.deleted_at IS NULL
+		ORDER BY pm.joined_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, q, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list members query: %w", err)
+	}
+	defer rows.Close()
+
+	var members []ProjectMember
+	for rows.Next() {
+		var m ProjectMember
+		if err := rows.Scan(&m.ProjectID, &m.AdminUserID, &m.Username, &m.Email, &m.Role, &m.JoinedAt); err != nil {
+			return nil, fmt.Errorf("scan member: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return members, nil
 }
