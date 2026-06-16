@@ -81,6 +81,58 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "policy deleted", "id": id})
 }
 
+func (h *PolicyHandler) Update(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "policy id is required"})
+		return
+	}
+
+	var req policyRequest
+	h.logger.Info().Str("policy_id", id).Msg("update policy request received")
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Error().Err(err).Msg("failed to parse update request body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.RateLimitRPM < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rate_limit_rpm must be >= 0"})
+		return
+	}
+
+	p := &model.Policy{
+		Name:         req.Name,
+		AuthRequired: req.AuthRequired,
+		RateLimitRPM: req.RateLimitRPM,
+	}
+
+	tc, err := storage.TenantFromContext(c.Request.Context())
+	if err == nil {
+		p.ProjectID = tc.ProjectID.String()
+	}
+
+	h.logger.Info().
+		Str("policy_id", id).
+		Str("name", p.Name).
+		Msg("updating policy in database")
+
+	if err := h.policyRepo.Update(c.Request.Context(), id, p); err != nil {
+		if errors.Is(err, storage.ErrPolicyNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+			return
+		}
+		h.logger.Error().Err(err).Str("policy_id", id).Msg("failed to update policy")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	p.ID = id
+	h.logger.Info().Str("policy_id", p.ID).Str("name", p.Name).Msg("policy updated successfully")
+	c.JSON(http.StatusOK, gin.H{"policy": p})
+}
+
 type policyAssignRequest struct {
 	PolicyID string `json:"policy_id" binding:"required"`
 }

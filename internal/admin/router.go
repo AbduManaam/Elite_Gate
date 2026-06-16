@@ -9,13 +9,14 @@ import (
 	"elitegate/internal/admin/handler"
 	"elitegate/internal/admin/middleware"
 	"elitegate/internal/auth"
+	"elitegate/internal/container"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handler, error) {
+func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string, containerMgr container.ContainerManager) (http.Handler, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
@@ -42,17 +43,24 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
 	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger)
 
-	// Repositories initialized in correct order
+	// Repositories initialized
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
 	policyRepo := storage.NewPolicyRepo(db)
 	projectRepo := storage.NewProjectRepo(db, logger)
+	apiKeyRepo := storage.NewApiKeyRepo(db)
+	auditLogRepo := storage.NewAuditLogRepo(db, logger)
+	gatewayRepo := storage.NewGatewayRepo(db)
 
-	// Handlers initialized in correct order
+	// Handlers initialized
 	routeHandler := handler.NewRouteHandler(routeRepo, logger)
 	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger)
 	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger)
 	projectHandler := handler.NewProjectHandler(projectRepo, logger)
+	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger)
+	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
+	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr)
+	syncHandler := handler.NewSyncHandler(gatewayRepo, logger)
 
 	r.POST("/admin/login", authHandler.Login)
 	r.POST("/admin/refresh", authHandler.Refresh)
@@ -74,6 +82,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 		v1.GET("/projects", projectHandler.List)
 		v1.PUT("/projects/:projectId", projectHandler.Update)
 		v1.DELETE("/projects/:projectId", projectHandler.Delete)
+		v1.POST("/reload", syncHandler.Reload)
 
 		projectGroup := v1.Group("/projects/:projectId")
 		projectGroup.Use(middleware.ProjectScope(membershipRepo))
@@ -101,6 +110,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 			{
 				policies.GET("", middleware.RBAC(middleware.RoleViewer), policyHandler.List)
 				policies.POST("", middleware.RBAC(middleware.RoleEditor), policyHandler.Create)
+				policies.PUT("/:id", middleware.RBAC(middleware.RoleEditor), policyHandler.Update)
 				policies.DELETE("/:id", middleware.RBAC(middleware.RoleOwner), policyHandler.Delete)
 			}
 			members := projectGroup.Group("/members")
@@ -110,7 +120,24 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string) (http.Handle
 				members.PUT("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.ChangeRole)
 				members.DELETE("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.RemoveMember)
 			}
+			keys := projectGroup.Group("/keys")
+			{
+				keys.GET("", middleware.RBAC(middleware.RoleViewer), apiKeyHandler.List)
+				keys.POST("", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Create)
+				keys.POST("/:id/rotate", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Rotate)
+				keys.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Revoke)
+			}
+			auditLogs := projectGroup.Group("/audit-logs")
+			{
+				auditLogs.GET("", middleware.RBAC(middleware.RoleViewer), auditLogHandler.List)
+			}
+			gateways := projectGroup.Group("/gateways")
+			{
+				gateways.POST("", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Provision)
+				gateways.DELETE("/:gatewayId", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Decommission)
+			}
 		}
+
 		admins := v1.Group("/admins")
 		{
 			admins.POST("", authHandler.Register)

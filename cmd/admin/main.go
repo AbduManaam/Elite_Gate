@@ -20,6 +20,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cannot start admin app: %v\n", err)
 		os.Exit(1)
 	}
+	defer a.Close()
 
 	if err := a.Server.Run(); err != nil {
 		a.Logger.Fatal().Err(err).Msg("server exited with error")
