@@ -36,6 +36,7 @@ const listQuery = `
 		r.policy_id,
 		COALESCE(p.auth_required, TRUE)  AS auth_required,
 		COALESCE(p.rate_limit_rpm, 0)    AS rate_limit_rpm,
+		COALESCE(p.allowed_origins, '{}') AS allowed_origins,
 		r.created_at,
 		r.updated_at
 	FROM   routes r
@@ -258,6 +259,7 @@ func scanRoute(s rowScanner) (model.Route, error) {
 		&policyID,
 		&rt.AuthRequired,
 		&rt.RateLimitRPM,
+		pq.Array(&rt.AllowedOrigins),
 		&rt.CreatedAt,
 		&rt.UpdatedAt,
 	)

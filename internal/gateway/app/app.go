@@ -11,11 +11,14 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
+	"elitegate/internal/auth"
 	"elitegate/internal/config"
 	gatewayRouter "elitegate/internal/gateway"
+	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	gateway "elitegate/internal/gateway/server"
 	"elitegate/internal/observability"
+	"elitegate/internal/ratelimit"
 	"elitegate/internal/storage"
 )
 
@@ -78,8 +81,20 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to start route loader: %w", err)
 	}
 
-	// Injected router configurations
-	router, err := gatewayRouter.NewRouter(logger, rdb, cfg, loader)
+	// Injected shared security configurations
+	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
+	apiKeyRepo := storage.NewApiKeyRepo(db)
+	keyStore := auth.NewRedisKeyStore(rdb, apiKeyRepo)
+	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore)
+
+	rpm := cfg.RateLimit.RequestsPerMinute
+	memFallback := ratelimit.NewMemoryLimiter(rpm)
+	// Start MemoryLimiter background cleanup loop using loaderCtx (stops on shutdown)
+	memFallback.StartCleanup(loaderCtx, time.Minute)
+
+	limiter := ratelimit.NewRedisLimiter(rdb, rpm, memFallback)
+
+	router, err := gatewayRouter.NewRouter(logger, db, rdb, cfg, loader, authMiddleware, limiter)
 	if err != nil {
 		if rdb != nil {
 			_ = rdb.Close()

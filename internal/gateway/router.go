@@ -4,13 +4,11 @@ import (
 	"database/sql"
 	"net/http"
 
-	"elitegate/internal/auth"
 	"elitegate/internal/config"
 	"elitegate/internal/gateway/handler"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/ratelimit"
-	"elitegate/internal/storage"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -22,18 +20,10 @@ func NewRouter(
 	rdb *redis.Client,
 	cfg *config.Config,
 	loader *runtime.Loader,
+	authMiddleware *middleware.AuthMiddleware,
+	limiter ratelimit.Limiter,
 ) (http.Handler, error) {
 	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap)
-
-	// Initializing the dynamic API Key Store (Redis Cache + Postgres Fallback)
-	apiKeyRepo := storage.NewApiKeyRepo(db)
-	keyStore := auth.NewRedisKeyStore(rdb, apiKeyRepo)
-	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
-	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore)
-
-	rpm := cfg.RateLimit.RequestsPerMinute
-	memFallback := ratelimit.NewMemoryLimiter(rpm)
-	limiter := ratelimit.NewRedisLimiter(rdb, rpm, memFallback)
 	rlMiddleware := middleware.NewRateLimitMiddleware(limiter)
 
 	mux := http.NewServeMux()
@@ -65,6 +55,7 @@ func NewRouter(
 	apiHandler := middleware.Chain(
 		dynamic,
 		middleware.RouteMatcher(loader),
+		middleware.CORS, // Mounted immediately after RouteMatcher
 		middleware.IPFilter,
 		authMiddleware.Middleware,
 		rlMiddleware.Middleware,

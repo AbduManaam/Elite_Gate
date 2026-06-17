@@ -9,14 +9,16 @@ import (
 	"elitegate/internal/admin/handler"
 	"elitegate/internal/admin/middleware"
 	"elitegate/internal/auth"
+	"elitegate/internal/config"
 	"elitegate/internal/container"
+	"elitegate/internal/ipfilter"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
-func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string, containerMgr container.ContainerManager) (http.Handler, error) {
+func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerMgr container.ContainerManager) (http.Handler, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
@@ -35,7 +37,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string, containerMgr
 		})
 	})
 
-	adminTokens, err := auth.NewAdminTokenManager(jwtSecret, "elitegate-admin")
+	adminTokens, err := auth.NewAdminTokenManager(cfg.Auth.JWTSecret, "elitegate-admin")
 	if err != nil {
 		return nil, fmt.Errorf("create admin token manager: %w", err)
 	}
@@ -62,16 +64,30 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, jwtSecret string, containerMgr
 	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr)
 	syncHandler := handler.NewSyncHandler(gatewayRepo, logger)
 
-	r.POST("/admin/login", authHandler.Login)
-	r.POST("/admin/refresh", authHandler.Refresh)
-	r.POST("/admin/logout", authHandler.Logout)
+	var ipAllowlist gin.HandlerFunc
+	if len(cfg.Server.AdminIPAllowlist) > 0 {
+		checker, err := ipfilter.NewIPChecker(cfg.Server.AdminIPAllowlist)
+		if err != nil {
+			return nil, fmt.Errorf("invalid IP allowlist configuration: %w", err)
+		}
+		ipAllowlist = middleware.AdminIPAllowlist(checker, cfg.Server.TrustProxy)
+	}
+
+	adminGroup := r.Group("/admin")
+	if ipAllowlist != nil {
+		adminGroup.Use(ipAllowlist)
+	}
+
+	adminGroup.POST("/login", authHandler.Login)
+	adminGroup.POST("/refresh", authHandler.Refresh)
+	adminGroup.POST("/logout", authHandler.Logout)
 
 	// ── Public bootstrap registration ─────────────────────────────────
 	// Only works when 0 admin users exist in the database.
 	// After the first admin is created, returns 403 Forbidden.
-	r.POST("/admin/register", authHandler.Register)
+	adminGroup.POST("/register", authHandler.Register)
 
-	v1 := r.Group("/admin/v1")
+	v1 := adminGroup.Group("/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))
 	{
 		membershipRepo := storage.NewMembershipRepo(db, logger)

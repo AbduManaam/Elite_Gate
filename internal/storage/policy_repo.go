@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"elitegate/internal/model"
+
+	"github.com/lib/pq"
 )
 
 type PolicyRepo struct {
@@ -26,12 +28,11 @@ func (r *PolicyRepo) ListAll(ctx context.Context) ([]model.Policy, error) {
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
-			SELECT id, project_id, name, auth_required, rate_limit_rpm, created_at, updated_at
+		q := fmt.Sprintf(`
+			SELECT %s
 			FROM policies
 			WHERE project_id = $1 AND deleted_at IS NULL
-			ORDER BY name ASC
-		`
+			ORDER BY name ASC`, selectFields)
 
 		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
@@ -70,13 +71,12 @@ func (r *PolicyRepo) GetByID(ctx context.Context, id string) (*model.Policy, err
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
-			SELECT id, project_id, name, auth_required, rate_limit_rpm, created_at, updated_at
+		q := fmt.Sprintf(`
+			SELECT %s
 			FROM policies
 			WHERE id = $1
 			  AND project_id = $2
-			  AND deleted_at IS NULL
-		`
+			  AND deleted_at IS NULL`, selectFields)
 
 		p, err = scanPolicy(tx.QueryRowContext(ctx, q, id, tc.ProjectID))
 		if err != nil {
@@ -106,19 +106,14 @@ func (r *PolicyRepo) Create(ctx context.Context, p *model.Policy) error {
 
 		p.ProjectID = tc.ProjectID.String()
 
-		const q = `
-			INSERT INTO policies (project_id, name, auth_required, rate_limit_rpm)
-			VALUES ($1, $2, $3, $4)
-			RETURNING id, created_at, updated_at
-		`
-
 		err = tx.QueryRowContext(
 			ctx,
-			q,
+			insertQ,
 			tc.ProjectID,
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
+			pq.Array(p.AllowedOrigins),
 		).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 
 		if err != nil {
@@ -136,26 +131,15 @@ func (r *PolicyRepo) Update(ctx context.Context, id string, p *model.Policy) err
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
-			UPDATE policies
-			SET    name           = $3,
-			       auth_required  = $4,
-			       rate_limit_rpm = $5,
-			       updated_at     = NOW()
-			WHERE  id = $1
-			   AND project_id = $2
-			   AND deleted_at IS NULL
-			RETURNING updated_at
-		`
-
 		err = tx.QueryRowContext(
 			ctx,
-			q,
+			updateQ,
 			id,
 			tc.ProjectID,
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
+			pq.Array(p.AllowedOrigins),
 		).Scan(&p.UpdatedAt)
 
 		if errors.Is(err, sql.ErrNoRows) {

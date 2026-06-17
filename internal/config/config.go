@@ -32,6 +32,8 @@ type ServerConfig struct {
 	RouteReloadInterval string            `mapstructure:"route_reload_interval"`
 	ProjectID           string            `mapstructure:"project_id"`
 	DevHostMap          map[string]string `mapstructure:"dev_host_map"`
+	AdminIPAllowlist    []string          `mapstructure:"admin_ip_allowlist"`
+	TrustProxy          bool              `mapstructure:"trust_proxy"`
 }
 
 type DatabaseConfig struct {
@@ -110,10 +112,19 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.route_reload_interval", "ROUTE_RELOAD_INTERVAL")
 	viper.BindEnv("app_env", "APP_ENV")
 	viper.BindEnv("server.project_id", "PROJECT_ID")
+	viper.BindEnv("server.trust_proxy", "TRUST_PROXY")
 
 	viper.AutomaticEnv()
 
 	var cfg Config
+
+	if allowlistRaw := os.Getenv("ADMIN_IP_ALLOWLIST"); allowlistRaw != "" {
+		cfg.Server.AdminIPAllowlist = strings.Split(allowlistRaw, ",")
+		for i, v := range cfg.Server.AdminIPAllowlist {
+			cfg.Server.AdminIPAllowlist[i] = strings.TrimSpace(v)
+		}
+	}
+
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}

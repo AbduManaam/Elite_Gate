@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -18,6 +19,30 @@ func NewMemoryLimiter(rpm int) *MemoryLimiter {
 		expiresAt:      make(map[string]time.Time),
 		requestsPerMin: rpm,
 	}
+}
+
+// StartCleanup launches a background worker to periodically delete expired keys from maps.
+func (m *MemoryLimiter) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.mu.Lock()
+				now := time.Now()
+				for key, exp := range m.expiresAt {
+					if now.After(exp) {
+						delete(m.counters, key)
+						delete(m.expiresAt, key)
+					}
+				}
+				m.mu.Unlock()
+			}
+		}
+	}()
 }
 
 func (m *MemoryLimiter) AllowWithLimit(key string, limit int) bool {

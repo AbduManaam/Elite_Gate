@@ -55,7 +55,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 	}
 
 	// Initialize router passing containerMgr
-	router, err := admin.NewRouter(logger, db, cfg.Auth.JWTSecret, containerMgr)
+	router, err := admin.NewRouter(logger, db, cfg, containerMgr)
 	if err != nil {
 		_ = containerMgr.Close()
 		_ = db.Close()
