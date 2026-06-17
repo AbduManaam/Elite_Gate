@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"database/sql"
 	"net/http"
 
+	"elitegate/internal/auth"
 	"elitegate/internal/config"
 	"elitegate/internal/gateway/handler"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/ratelimit"
+	"elitegate/internal/storage"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -15,11 +18,18 @@ import (
 
 func NewRouter(
 	logger zerolog.Logger,
+	db *sql.DB,
 	rdb *redis.Client,
 	cfg *config.Config,
 	loader *runtime.Loader,
 ) (http.Handler, error) {
 	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap)
+
+	// Initializing the dynamic API Key Store (Redis Cache + Postgres Fallback)
+	apiKeyRepo := storage.NewApiKeyRepo(db)
+	keyStore := auth.NewRedisKeyStore(rdb, apiKeyRepo)
+	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
+	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore)
 
 	rpm := cfg.RateLimit.RequestsPerMinute
 	memFallback := ratelimit.NewMemoryLimiter(rpm)
@@ -56,7 +66,7 @@ func NewRouter(
 		dynamic,
 		middleware.RouteMatcher(loader),
 		middleware.IPFilter,
-		middleware.Auth(cfg.Auth.JWTSecret),
+		authMiddleware.Middleware,
 		rlMiddleware.Middleware,
 	)
 	mux.Handle("/api/", apiHandler)

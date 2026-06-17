@@ -36,15 +36,19 @@ func (s *RedisKeyStore) Validate(key string) (string, bool) {
 	keyHash := hashKey(key)
 	cacheKey := keyPrefix + keyHash
 
-	clientID, err := s.redis.Get(ctx, cacheKey).Result()
-	if err == nil {
-		return clientID, true
+	//Checking if API key is available in Redis cache
+	if s.redis != nil {
+		clientID, err := s.redis.Get(ctx, cacheKey).Result()
+		if err == nil {
+			return clientID, true
+		}
 	}
 
 	if s.db == nil {
 		return "", false
 	}
 
+	// Fallback to here, when Redis cache is not available, to check api key availability in postgresql database
 	record, err := s.db.FindByHash(ctx, keyHash)
 	if err != nil || record == nil {
 		return "", false
@@ -54,7 +58,9 @@ func (s *RedisKeyStore) Validate(key string) (string, bool) {
 		return "", false
 	}
 
-	s.redis.Set(ctx, cacheKey, record.ClientID, cacheTTL)
+	if s.redis != nil {
+		s.redis.Set(ctx, cacheKey, record.ClientID, cacheTTL)
+	}
 	return record.ClientID, true
 }
 

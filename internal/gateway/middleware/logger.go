@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -47,9 +49,33 @@ type statusWriter struct {
 	status int
 }
 
+func (sw *statusWriter) Write(b []byte) (int, error) {
+	if sw.status == 0 {
+		sw.status = http.StatusOK
+	}
+	return sw.ResponseWriter.Write(b)
+}
+
 func (sw *statusWriter) WriteHeader(code int) {
-	sw.status = code
+	if sw.status == 0 {
+		sw.status = code
+	}
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+// Flush() Supports Server-Sent Events (SSE) streaming
+func (sw *statusWriter) Flush() {
+	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack() Supports WebSocket and gRPC connection upgrades.
+func (sw *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := sw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
 func requestIDFromRequest(r *http.Request) string {

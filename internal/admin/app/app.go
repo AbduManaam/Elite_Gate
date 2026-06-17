@@ -24,8 +24,7 @@ type App struct {
 	Cancel       context.CancelFunc
 }
 
-// StartApp sets up the admin app, database, logging, and HTTP server.
-// Cleans up resources on failure.
+// StartApp sets up the admin app, database, logging, and HTTP server.Cleans up resources on failure.
 // Returns an App with the logger, database, and server configured.
 func StartApp(cfg *config.Config) (*App, error) {
 	if err := os.MkdirAll("logs", 0755); err != nil {
@@ -43,7 +42,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 	}
 
-	// 1. Create the Docker Container Manager
+	// Create the Docker Container Manager
 	containerMgr, err := container.NewDockerContainerManager(
 		cfg.Database.DSN,
 		cfg.Redis.Addr,
@@ -55,7 +54,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to create docker container manager: %w", err)
 	}
 
-	// 2. Initialize router passing containerMgr
+	// Initialize router passing containerMgr
 	router, err := admin.NewRouter(logger, db, cfg.Auth.JWTSecret, containerMgr)
 	if err != nil {
 		_ = containerMgr.Close()

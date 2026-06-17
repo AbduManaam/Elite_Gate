@@ -65,6 +65,11 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		rt, ok := r.Context().Value(shared.ContextKeyRoute).(*model.Route)
+		if ok && rt != nil && !rt.AuthRequired {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		var clientID, role string
 
