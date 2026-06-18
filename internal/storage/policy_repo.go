@@ -15,6 +15,27 @@ type PolicyRepo struct {
 	BaseRepo
 }
 
+const selectFields = "id, project_id, name, auth_required, rate_limit_rpm, allowed_origins, created_at, updated_at"
+
+const insertQ = `
+	INSERT INTO policies (project_id, name, auth_required, rate_limit_rpm, allowed_origins)
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING id, created_at, updated_at
+`
+
+const updateQ = `
+	UPDATE policies
+	SET    name            = $3,
+	       auth_required   = $4,
+	       rate_limit_rpm  = $5,
+	       allowed_origins = $6,
+	       updated_at      = NOW()
+	WHERE  id = $1
+	   AND project_id = $2
+	   AND deleted_at IS NULL
+	RETURNING updated_at
+`
+
 func NewPolicyRepo(db *sql.DB) *PolicyRepo {
 	return &PolicyRepo{BaseRepo{db: db}}
 }
@@ -201,6 +222,7 @@ func scanPolicy(s policyScanner) (model.Policy, error) {
 		&p.Name,
 		&p.AuthRequired,
 		&p.RateLimitRPM,
+		pq.Array(&p.AllowedOrigins),
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)

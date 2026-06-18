@@ -6,6 +6,7 @@ import (
 
 	"elitegate/internal/config"
 	"elitegate/internal/gateway/handler"
+	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/ratelimit"
@@ -22,8 +23,9 @@ func NewRouter(
 	loader *runtime.Loader,
 	authMiddleware *middleware.AuthMiddleware,
 	limiter ratelimit.Limiter,
+	hc *health.Checker,
 ) (http.Handler, error) {
-	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap)
+	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap, hc)
 	rlMiddleware := middleware.NewRateLimitMiddleware(limiter)
 
 	mux := http.NewServeMux()

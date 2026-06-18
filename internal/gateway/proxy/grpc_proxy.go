@@ -39,22 +39,22 @@ func getConn(addr string) (*grpc.ClientConn, error) {
 // TransparentHandler forwards unknown RPCs to backendAddr using gRPC transparent proxying.
 func TransparentHandler(backendAddr string) grpc.StreamHandler {
 	return func(srv interface{}, stream grpc.ServerStream) error {
-		// FIX: use grpc.Method(ctx) — grpc.MethodFromServerStream is not public API.
+
 		fullMethod, ok := grpc.Method(stream.Context())
 		if !ok {
 			return status.Error(codes.Internal, "method not found")
 		}
 
+		// Forward client metadata such as auth tokens and trace IDs to the backend.
 		md, _ := metadata.FromIncomingContext(stream.Context())
 		outCtx := metadata.NewOutgoingContext(stream.Context(), md)
 
-		// FIX: reuse connection instead of dialing per RPC.
 		conn, err := getConn(backendAddr)
 		if err != nil {
 			return status.Errorf(codes.Unavailable, "dial backend: %v", err)
 		}
 
-		// FIX: use a cancellable context so both goroutines are torn down together.
+		// Create a shared context so one goroutine can stop the other when done or on error
 		outCtx, cancel := context.WithCancel(outCtx)
 		defer cancel()
 
@@ -67,12 +67,17 @@ func TransparentHandler(backendAddr string) grpc.StreamHandler {
 			return status.Errorf(codes.Internal, "client stream: %v", err)
 		}
 
+		// ── METADATA FORWARDING
+		if err := forwardHeaders(stream, clientStream); err != nil {
+			_ = err
+		}
+
 		errCh := make(chan error, 2)
 
 		// client -> backend
 		go func() {
 			err := copyStream(clientStream, stream)
-			// FIX: signal to backend that the client is done sending.
+			// signal to backend that the client is done sending.
 			clientStream.CloseSend()
 			errCh <- err
 		}()
@@ -80,8 +85,7 @@ func TransparentHandler(backendAddr string) grpc.StreamHandler {
 		// backend -> client
 		go func() { errCh <- copyStream(stream, clientStream) }()
 
-		// FIX: always drain both goroutines; cancel context on first real error
-		// so the other goroutine is also unblocked.
+		// Ensure both goroutines finish; cancel the context on the first error.
 		var firstErr error
 		for i := 0; i < 2; i++ {
 			if err := <-errCh; err != nil && err != io.EOF {
@@ -91,6 +95,9 @@ func TransparentHandler(backendAddr string) grpc.StreamHandler {
 				}
 			}
 		}
+
+		// ── METADATA FORWARDING
+		forwardTrailers(stream, clientStream)
 		return firstErr
 	}
 }
@@ -126,7 +133,7 @@ func (ProxyCodec) Unmarshal(data []byte, v interface{}) error {
 	return status.Error(codes.Internal, "invalid frame")
 }
 
-func (ProxyCodec) Name() string { return "proxy" }
+func (ProxyCodec) Name() string   { return "proxy" }
 func (ProxyCodec) String() string { return "proxy" }
 
 // ResolveGRPCBackend picks upstream host from route table (longest prefix on service name).

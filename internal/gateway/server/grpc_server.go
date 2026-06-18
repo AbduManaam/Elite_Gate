@@ -11,23 +11,31 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/proxy"
 	"elitegate/internal/gateway/runtime"
 )
 
 type GRPCGateway struct {
-	logger  zerolog.Logger
-	loader  *runtime.Loader
-	port    string
-	hostMap map[string]string
-
-	// FIX: cache the backends map and rebuild only when routes change.
-	mu       sync.RWMutex
-	backends map[string]string
+	logger       zerolog.Logger
+	loader       *runtime.Loader
+	port         string
+	hostMap      map[string]string
+	interceptors *GRPCSecurityInterceptors
+	health       *health.Checker
+	mu           sync.RWMutex
+	backends     map[string]string
 }
 
-func NewGRPCGateway(logger zerolog.Logger, loader *runtime.Loader, port string, hostMap map[string]string) *GRPCGateway {
-	g := &GRPCGateway{logger: logger, loader: loader, port: port, hostMap: hostMap}
+func NewGRPCGateway(logger zerolog.Logger, loader *runtime.Loader, port string, hostMap map[string]string, interceptors *GRPCSecurityInterceptors, hc *health.Checker) *GRPCGateway {
+	g := &GRPCGateway{
+		logger:       logger,
+		loader:       loader,
+		port:         port,
+		hostMap:      hostMap,
+		interceptors: interceptors,
+		health:       hc,
+	}
 	g.backends = g.buildGRPCBackends()
 	return g
 }
@@ -62,29 +70,40 @@ func (g *GRPCGateway) Start(ctx context.Context) error {
 		}
 	}()
 
-	s := grpc.NewServer(
-		grpc.ForceServerCodec(proxy.ProxyCodec{}),
-		grpc.UnknownServiceHandler(func(srv interface{}, stream grpc.ServerStream) error {
-			// FIX: grpc.MethodFromServerStream is not public API.
-			fullMethod, ok := grpc.Method(stream.Context())
-			if !ok {
-				return status.Error(codes.Internal, "method not found")
-			}
+	var opts []grpc.ServerOption
+	opts = append(opts, grpc.ForceServerCodec(proxy.ProxyCodec{}))
+	if g.interceptors != nil {
+		opts = append(opts, grpc.UnaryInterceptor(g.interceptors.Unary()))
+		opts = append(opts, grpc.StreamInterceptor(g.interceptors.Stream()))
+	}
+	opts = append(opts, grpc.UnknownServiceHandler(func(srv interface{}, stream grpc.ServerStream) error {
+		//grpc.MethodFromServerStream is not public API.
+		fullMethod, ok := grpc.Method(stream.Context())
+		if !ok {
+			return status.Error(codes.Internal, "method not found")
+		}
 
-			// FIX: read from cache instead of rebuilding on every RPC.
-			g.mu.RLock()
-			backends := g.backends
-			g.mu.RUnlock()
+		//read from cache instead of rebuilding on every RPC.
+		g.mu.RLock()
+		backends := g.backends
+		g.mu.RUnlock()
 
-			addr, ok := proxy.ResolveGRPCBackend(fullMethod, backends)
-			if !ok {
-				return status.Error(codes.NotFound, "no grpc route")
-			}
-			return proxy.TransparentHandler(addr)(srv, stream)
-		}),
-	)
+		addr, ok := proxy.ResolveGRPCBackend(fullMethod, backends)
+		if !ok {
+			return status.Error(codes.NotFound, "no grpc route")
+		}
 
-	// FIX: graceful shutdown when ctx is cancelled.
+		// HEALTH CHECK
+		if g.health != nil && !g.health.IsHealthy(addr) {
+			return status.Error(codes.Unavailable, "upstream is currently unhealthy")
+		}
+
+		return proxy.TransparentHandler(addr)(srv, stream)
+	}))
+
+	s := grpc.NewServer(opts...)
+
+	//graceful shutdown when ctx is cancelled.
 	go func() {
 		<-ctx.Done()
 		s.GracefulStop()

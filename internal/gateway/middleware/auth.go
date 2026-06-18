@@ -9,7 +9,27 @@ import (
 	"elitegate/internal/auth"
 	"elitegate/internal/model"
 	"elitegate/internal/shared"
+
+	"github.com/rs/zerolog"
 )
+
+type APIKeyStore interface {
+	Validate(key string) (string, bool)
+}
+
+type AuthMiddleware struct {
+	JWTValidator *auth.JWTValidator
+	KeyStore     APIKeyStore
+	Logger       *zerolog.Logger
+}
+
+func NewAuthMiddleware(jwtValidator *auth.JWTValidator, keyStore APIKeyStore, logger *zerolog.Logger) *AuthMiddleware {
+	return &AuthMiddleware{
+		JWTValidator: jwtValidator,
+		KeyStore:     keyStore,
+		Logger:       logger,
+	}
+}
 
 func Auth(jwtSecret string) func(http.Handler) http.Handler {
 	validator := auth.NewJWTValidator(jwtSecret)
@@ -54,11 +74,6 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 	}
 }
 
-// Responsible for:
-// reading Authorization header
-// calling JWT validator
-// attaching identity into request context
-// blocking invalid requests
 func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isPublicPath(r.URL.Path) {
@@ -75,7 +90,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
 			tokenStr := strings.TrimPrefix(bearer, "Bearer ")
-			claims, err := a.jwtValidator.Validate(tokenStr)
+			claims, err := a.JWTValidator.Validate(tokenStr)
 			if err != nil {
 				httpJSON(w, http.StatusUnauthorized,
 					map[string]string{"error": "invalid token", "detail": err.Error()})
@@ -83,8 +98,8 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			clientID = claims.ClientID
 			role = claims.Role
-		} else if key := r.Header.Get("X-API-Key"); key != "" && a.keyStore != nil {
-			id, valid := a.keyStore.Validate(key)
+		} else if key := r.Header.Get("X-API-Key"); key != "" && a.KeyStore != nil {
+			id, valid := a.KeyStore.Validate(key)
 			if !valid {
 				httpJSON(w, http.StatusUnauthorized,
 					map[string]string{"error": "invalid api key"})
@@ -102,22 +117,6 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, shared.ContextKeyRole, role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-type APIKeyStore interface {
-	Validate(key string) (string, bool)
-}
-
-type AuthMiddleware struct {
-	jwtValidator *auth.JWTValidator
-	keyStore     APIKeyStore
-}
-
-func NewAuthMiddleware(jwtValidator *auth.JWTValidator, keyStore APIKeyStore) *AuthMiddleware {
-	return &AuthMiddleware{
-		jwtValidator: jwtValidator,
-		keyStore:     keyStore,
-	}
 }
 
 func isPublicPath(path string) bool {

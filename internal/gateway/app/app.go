@@ -14,6 +14,7 @@ import (
 	"elitegate/internal/auth"
 	"elitegate/internal/config"
 	gatewayRouter "elitegate/internal/gateway"
+	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	gateway "elitegate/internal/gateway/server"
@@ -39,13 +40,13 @@ func StartApp(cfg *config.Config) (*App, error) {
 	logger := observability.NewLogger(cfg.Log)
 	logger.Info().Msg("elitegate gateway starting...")
 
-	// Connect to PostgreSQL using Config struct
+	// Connect to PostgreSQL
 	db, err := storage.NewPostgres(logger, cfg.Database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 	}
 
-	// Connect to Redis using Config struct
+	// Connect to Redis
 	rdb, err := storage.NewRedis(cfg.Redis)
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to connect to Redis at startup; falling back to in-memory rate limiting")
@@ -64,7 +65,6 @@ func StartApp(cfg *config.Config) (*App, error) {
 	loaderCtx := context.Background()
 	if cfg.Server.ProjectID != "" {
 		if projectUUID, err := uuid.Parse(cfg.Server.ProjectID); err == nil {
-			// Attach the TenantContext so the repository uses Row-Level Security (RLS)
 			tc := storage.TenantContext{ProjectID: projectUUID}
 			loaderCtx = storage.WithTenantContext(loaderCtx, tc)
 			logger.Info().Str("project_id", cfg.Server.ProjectID).Msg("Gateway running in isolated single-project mode")
@@ -81,20 +81,36 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to start route loader: %w", err)
 	}
 
+	// ── Health Checker ────────────────────────────────────────────────────
+	// Create the checker, register every upstream from the current route
+	// snapshot, then start the background probe loop.
+	hc := health.New(
+		10*time.Second, // probe every 10 seconds
+		"/health",      // health endpoint path on each upstream
+		3*time.Second,  // per-probe HTTP timeout
+		logger,
+	)
+	for _, rt := range loader.Current().Routes {
+		if rt.Enabled && rt.UpstreamURL != "" {
+			hc.Register(rt.UpstreamURL)
+		}
+	}
+	hc.Start(loaderCtx) // stops automatically when loaderCtx is cancelled (shutdown)
+	// ─────────────────────────────────────────────────────────────────────
+
 	// Injected shared security configurations
 	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
 	apiKeyRepo := storage.NewApiKeyRepo(db)
 	keyStore := auth.NewRedisKeyStore(rdb, apiKeyRepo)
-	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore)
+	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore, &logger)
 
 	rpm := cfg.RateLimit.RequestsPerMinute
 	memFallback := ratelimit.NewMemoryLimiter(rpm)
-	// Start MemoryLimiter background cleanup loop using loaderCtx (stops on shutdown)
 	memFallback.StartCleanup(loaderCtx, time.Minute)
 
 	limiter := ratelimit.NewRedisLimiter(rdb, rpm, memFallback)
 
-	router, err := gatewayRouter.NewRouter(logger, db, rdb, cfg, loader, authMiddleware, limiter)
+	router, err := gatewayRouter.NewRouter(logger, db, rdb, cfg, loader, authMiddleware, limiter, hc)
 	if err != nil {
 		if rdb != nil {
 			_ = rdb.Close()
@@ -102,6 +118,9 @@ func StartApp(cfg *config.Config) (*App, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to build router: %w", err)
 	}
+
+	// gRPC Interceptors setup
+	grpcInterceptors := gateway.NewGRPCSecurityInterceptors(loader, authMiddleware, limiter, cfg.Server.TrustProxy, logger)
 
 	// Resolve dynamic server port
 	port := cfg.Server.GatewayPort
@@ -112,7 +131,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		port = ":" + port
 	}
 
-	server, err := gateway.NewServer(port, router, logger, cfg.Server, loader)
+	server, err := gateway.NewServer(port, router, logger, cfg.Server, loader, grpcInterceptors, hc)
 	if err != nil {
 		if rdb != nil {
 			_ = rdb.Close()

@@ -73,7 +73,7 @@ func (in *GRPCSecurityInterceptors) getClientIP(ctx context.Context) string {
 	return ip
 }
 
-func (in *GRPCSecurityInterceptors) matchRoute(fullMethod string, config *runtime.Config) *model.Route {
+func (in *GRPCSecurityInterceptors) matchRoute(fullMethod string, config runtime.Snapshot) *model.Route {
 	service := fullMethod
 	if i := strings.LastIndex(service, "/"); i > 0 {
 		service = service[:i]
@@ -105,7 +105,7 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 
 	if len(authVals) > 0 && strings.HasPrefix(authVals[0], "Bearer ") {
 		token := strings.TrimPrefix(authVals[0], "Bearer ")
-		claims, err := in.authMiddleware.JWTValidator().Validate(token)
+		claims, err := in.authMiddleware.JWTValidator.Validate(token)
 		if err != nil {
 			// Log internally, never expose err details to caller
 			in.logger.Warn().
@@ -122,8 +122,8 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 		return AuthInfo{ClientID: claims.ClientID, Role: claims.Role}, nil
 	}
 
-	if len(apiKeyVals) > 0 && in.authMiddleware.KeyStore() != nil {
-		id, valid := in.authMiddleware.KeyStore().Validate(apiKeyVals[0])
+	if len(apiKeyVals) > 0 && in.authMiddleware.KeyStore != nil {
+		id, valid := in.authMiddleware.KeyStore.Validate(apiKeyVals[0])
 		if !valid {
 			in.logger.Warn().
 				Str("method", fullMethod).

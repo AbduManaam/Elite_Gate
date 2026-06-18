@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"elitegate/internal/config"
+	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/runtime"
 
 	"github.com/rs/zerolog"
@@ -26,7 +27,7 @@ type Server struct {
 // DevHostMap converts Docker service names to localhost,
 // helping the gateway find services that are running on the local machine.
 
-func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig, loader *runtime.Loader) (*Server, error) {
+func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg config.ServerConfig, loader *runtime.Loader, interceptors *GRPCSecurityInterceptors, hc *health.Checker) (*Server, error) {
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("parse read timeout: %w", err)
@@ -48,7 +49,7 @@ func NewServer(port string, handler http.Handler, logger zerolog.Logger, cfg con
 	if grpcPort == "" {
 		grpcPort = ":50051"
 	}
-	grpcGateway := NewGRPCGateway(logger, loader, grpcPort, cfg.DevHostMap)
+	grpcGateway := NewGRPCGateway(logger, loader, grpcPort, cfg.DevHostMap, interceptors, hc)
 
 	return &Server{
 		logger:          logger,
