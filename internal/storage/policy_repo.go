@@ -127,6 +127,11 @@ func (r *PolicyRepo) Create(ctx context.Context, p *model.Policy) error {
 
 		p.ProjectID = tc.ProjectID.String()
 
+		allowedOrigins := p.AllowedOrigins
+		if allowedOrigins == nil {
+			allowedOrigins = []string{}
+		}
+
 		err = tx.QueryRowContext(
 			ctx,
 			insertQ,
@@ -134,7 +139,7 @@ func (r *PolicyRepo) Create(ctx context.Context, p *model.Policy) error {
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
-			pq.Array(p.AllowedOrigins),
+			pq.Array(allowedOrigins),
 		).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 
 		if err != nil {
@@ -152,6 +157,11 @@ func (r *PolicyRepo) Update(ctx context.Context, id string, p *model.Policy) err
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
+		allowedOrigins := p.AllowedOrigins
+		if allowedOrigins == nil {
+			allowedOrigins = []string{}
+		}
+
 		err = tx.QueryRowContext(
 			ctx,
 			updateQ,
@@ -160,7 +170,7 @@ func (r *PolicyRepo) Update(ctx context.Context, id string, p *model.Policy) err
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
-			pq.Array(p.AllowedOrigins),
+			pq.Array(allowedOrigins),
 		).Scan(&p.UpdatedAt)
 
 		if errors.Is(err, sql.ErrNoRows) {
