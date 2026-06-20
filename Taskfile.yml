@@ -7,7 +7,6 @@ vars:
   ADMIN_MAIN: ./cmd/admin
   TOKEN_MAIN: ./cmd/token
   WORKER_MAIN: ./cmd/worker
-  UI_DIR: web/admin-ui
 
 tasks:
   default:
@@ -174,14 +173,3 @@ tasks:
     cmds:
       - go run {{.TOKEN_MAIN}} -secret "{{.JWT_SECRET}}" {{if .CLIENT}}-client "{{.CLIENT}}"{{end}} {{if .ROLE}}-role "{{.ROLE}}"{{end}}
 
-  ui-dev:
-    desc: Start admin UI dev server
-    dir: "{{.UI_DIR}}"
-    cmds:
-      - npm run dev
-
-  ui-build:
-    desc: Build admin UI for production
-    dir: "{{.UI_DIR}}"
-    cmds:
-      - npm run build
