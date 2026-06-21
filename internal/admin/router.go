@@ -87,6 +87,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	// After the first admin is created, returns 403 Forbidden.
 	adminGroup.POST("/register", authHandler.Register)
 
+	// ── Permanent public self-service tenant signup ───────────────────────
+	// Any company can call this to self-onboard. No token, no super-admin needed.
+	// This is the PRIMARY onboarding path for all tenants on the SaaS platform.
+	adminGroup.POST("/signup", authHandler.Signup)
+
 	v1 := adminGroup.Group("/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))
 	{
@@ -156,7 +161,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 
 		admins := v1.Group("/admins")
 		{
-			admins.POST("", authHandler.Register)
+			// SuperAdminOnly: this endpoint is a PLATFORM-OPERATOR SUPPORT TOOL.
+			// Normal tenants onboard via POST /admin/signup — they never hit this route.
+			// Use this only for support escalations (e.g. manually provisioning an account
+			// on a tenant's behalf). Future operator features reuse the same middleware.
+			admins.POST("", middleware.SuperAdminOnly(authRepo, logger), authHandler.Register)
 		}
 	}
 

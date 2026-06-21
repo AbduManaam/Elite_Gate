@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	adminmw "elitegate/internal/admin/middleware"
@@ -80,6 +81,23 @@ type registerRequest struct {
 type registerResponse struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
+}
+
+// signupRequest is the body for POST /admin/signup (permanent public self-service).
+type signupRequest struct {
+	Username    string `json:"username"  binding:"required,min=3,max=64"`
+	Password    string `json:"password"  binding:"required"`
+	CompanyName string `json:"company"   binding:"required,min=1,max=128"`
+	Plan        string `json:"plan"` // optional, defaults to "free"
+}
+
+// signupResponse is returned after a successful self-service signup.
+type signupResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	TokenType    string `json:"token_type"`
+	ProjectID    string `json:"project_id"`
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -362,13 +380,22 @@ func (h *AuthHandler) issueTokens(
 //
 // It serves TWO routes with ONE handler:
 //
-//   POST /admin/register     → public, only works when 0 admins exist (bootstrap)
-//   POST /admin/v1/admins    → protected, requires a valid admin JWT
+//	POST /admin/register     → public, only works when 0 admins exist (bootstrap)
+//	POST /admin/v1/admins    → protected, requires a valid admin JWT
+//
+// IMPORTANT (SaaS onboarding model):
+//
+//	POST /admin/v1/admins is a PLATFORM-OPERATOR SUPPORT TOOL — not the normal
+//	tenant onboarding path. Use it only for edge cases such as: manually
+//	provisioning an account on a tenant's behalf for support/escalation reasons.
+//	Normal tenant self-registration goes through POST /admin/signup, which
+//	requires NO super-admin involvement.
 //
 // How it knows which route called it:
-//   AdminAuth middleware sets admin_user_id in context for the protected route.
-//   If that key is present → authenticated call → skip bootstrap check.
-//   If that key is absent  → public call → enforce bootstrap gate.
+//
+//	AdminAuth middleware sets admin_user_id in context for the protected route.
+//	If that key is present → authenticated call → skip bootstrap check.
+//	If that key is absent  → public call → enforce bootstrap gate.
 func (h *AuthHandler) Register(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
 
@@ -411,7 +438,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	// ── Persist ───────────────────────────────────────────────────────
-	user, err := h.repo.CreateAdminUser(c.Request.Context(), req.Username, string(hash))
+	// Bootstrap path: isSuperAdmin=true (first-ever admin = platform operator).
+	// Authenticated path (POST /admin/v1/admins): isSuperAdmin=false (support account).
+	// Note: isAuthenticated was already determined above (bootstrap gate check).
+	isSuperAdmin := !isAuthenticated
+	user, err := h.repo.CreateAdminUser(c.Request.Context(), req.Username, string(hash), isSuperAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
 		return
@@ -430,6 +461,133 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		ID:       user.ID,
 		Username: user.Username,
 	})
+}
+
+// Signup handles POST /admin/signup.
+//
+// This is a PERMANENT, public, unauthenticated endpoint.
+// It requires NO super-admin involvement at any point — this is by design.
+// Any company can call this endpoint to self-onboard onto the platform.
+//
+// Uses SignupTx to atomically:
+//  1. Create an admin_user account (is_super_admin=FALSE — tenant, not operator)
+//  2. Create a project owned by that user
+//  3. Insert the owner project_members row
+//
+// If project creation fails, the admin_user row is rolled back —
+// no orphaned accounts are possible.
+func (h *AuthHandler) Signup(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req signupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn().Err(err).Msg("signup: invalid request body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+
+	// ── Password strength ─────────────────────────────────────────────
+	if err := pwdpkg.Validate(req.Password); err != nil {
+		h.logger.Warn().Str("username", req.Username).Msg("signup: weak password rejected")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// ── Hash password ─────────────────────────────────────────────────
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		h.logger.Error().Err(err).Str("username", req.Username).Msg("signup: password hashing failed")
+		h.internal(c, err)
+		return
+	}
+
+	slug := toSlug(req.CompanyName)
+	plan := req.Plan
+	if plan == "" {
+		plan = "free"
+	}
+
+	// ── Single atomic transaction: admin_user + project + membership ──────────
+	// SignupTx rolls back ALL inserts if any step fails.
+	// No orphaned admin_user rows are possible.
+	result, err := h.repo.SignupTx(
+		c.Request.Context(),
+		req.Username, string(hash), req.CompanyName, slug, plan,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		h.logger.Info().Str("username", req.Username).Msg("signup: username already taken")
+		c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
+		return
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Str("username", req.Username).Msg("signup: atomic signup transaction failed")
+		h.internal(c, err)
+		return
+	}
+
+	h.logger.Info().
+		Str("username", result.User.Username).
+		Str("admin_user_id", result.User.ID).
+		Str("project_id", result.Project.ID).
+		Str("company", req.CompanyName).
+		Msg("new tenant self-registered via /signup")
+
+	// ── Issue tokens — company is live immediately ───────────────────────
+	access, err := h.tokens.CreateAdminAccessToken(result.User.ID, result.User.Username)
+	if err != nil {
+		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: access token generation failed")
+		h.internal(c, err)
+		return
+	}
+	refresh, err := authpkg.GenerateRefreshToken()
+	if err != nil {
+		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: refresh token generation failed")
+		h.internal(c, err)
+		return
+	}
+	exp := time.Now().Add(authpkg.RefreshTokenTTL)
+	if err := h.repo.CreateRefreshToken(
+		c.Request.Context(),
+		result.User.ID,
+		authpkg.HashToken(refresh),
+		exp,
+		adminmw.ClientIP(c),
+		c.Request.UserAgent(),
+	); err != nil {
+		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: refresh token persistence failed")
+		h.internal(c, err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, signupResponse{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		ExpiresIn:    int(authpkg.AccessTokenTTL.Seconds()),
+		TokenType:    "Bearer",
+		ProjectID:    result.Project.ID,
+	})
+}
+
+// toSlug converts a human company name to a URL-safe slug.
+// "Company B Corp" → "company-b-corp"
+func toSlug(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevHyphen = false
+		} else if !prevHyphen {
+			b.WriteRune('-')
+			prevHyphen = true
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	if result == "" {
+		result = "project"
+	}
+	return result
 }
 
 func (h *AuthHandler) internal(c *gin.Context, err error) {
