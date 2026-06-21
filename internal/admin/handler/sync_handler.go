@@ -12,6 +12,40 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// reloadOne sends a single POST /reload to one gateway and returns an
+// error describing what went wrong, or nil on success. This is the
+// single-target unit both the bulk Reload handler and the platform-level
+// single-gateway restart endpoint call — logic lives in exactly one place.
+func (h *SyncHandler) reloadOne(ctx context.Context, g storage.GatewayRecord) error {
+	url := reloadURL(g)
+	log := h.logger.With().Str("gateway_id", g.ID).Str("url", url).Logger()
+
+	reqCtx, cancel := context.WithTimeout(ctx, gatewayReloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to build reload request")
+		return fmt.Errorf("gateway %s: failed to build request: %w", g.ID, err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Error().Err(err).Msg("reload request failed")
+		return fmt.Errorf("gateway %s: request failed: %w", g.ID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Msg("reload returned non-200")
+		return fmt.Errorf("gateway %s: unexpected status %d", g.ID, resp.StatusCode)
+	}
+
+	log.Info().Msg("gateway reloaded successfully")
+	return nil
+}
+
 const gatewayReloadTimeout = 5 * time.Second
 
 type SyncHandler struct {
@@ -48,9 +82,6 @@ func (h *SyncHandler) Reload(c *gin.Context) {
 
 	h.logger.Info().Int("gateway_count", len(gateways)).Msg("fanning out reload to active gateways")
 
-	// Shared HTTP client — reused across goroutines; timeout enforced per-request below.
-	client := &http.Client{}
-
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -61,43 +92,11 @@ func (h *SyncHandler) Reload(c *gin.Context) {
 		wg.Add(1)
 		go func(g storage.GatewayRecord) {
 			defer wg.Done()
-
-			url := reloadURL(g)
-			log := h.logger.With().Str("gateway_id", g.ID).Str("url", url).Logger()
-
-			// Give each gateway its own cancellable context so one slow node
-			// cannot block others past the timeout.
-			ctx, cancel := context.WithTimeout(c.Request.Context(), gatewayReloadTimeout)
-			defer cancel()
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-			if err != nil {
-				log.Error().Err(err).Msg("failed to build reload request")
+			if err := h.reloadOne(c.Request.Context(), g); err != nil {
 				mu.Lock()
-				errs = append(errs, fmt.Sprintf("gateway %s: failed to build request", g.ID))
+				errs = append(errs, err.Error())
 				mu.Unlock()
-				return
 			}
-
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Error().Err(err).Msg("reload request failed")
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("gateway %s: request failed", g.ID))
-				mu.Unlock()
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				log.Warn().Int("status", resp.StatusCode).Msg("reload returned non-200")
-				mu.Lock()
-				errs = append(errs, fmt.Sprintf("gateway %s: unexpected status %d", g.ID, resp.StatusCode))
-				mu.Unlock()
-				return
-			}
-
-			log.Info().Msg("gateway reloaded successfully")
 		}(gw)
 	}
 

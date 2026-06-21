@@ -71,7 +71,9 @@ services:
       - ../.env
     volumes:
       - ../logs:/app/logs
-      - /var/run/docker.sock:/var/run/docker.sock
+      - type: npipe
+        source: \\.\pipe\docker_engine
+        target: //./pipe/docker_engine
     depends_on:
       postgres:
         condition: service_healthy

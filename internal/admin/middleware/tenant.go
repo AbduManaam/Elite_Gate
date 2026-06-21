@@ -33,7 +33,9 @@ const (
 //    └── Yes ──▶ Get user's role (owner, editor, or viewer)
 //          │
 //          ▼
-// [Check 4] Set TenantContext containing (ProjectID, UserID, UserRole)
+// [Check 4] Is the project active (not suspended)?
+//    ├── No  ──▶ Abort with "403 project suspended"
+//    └── Yes ──▶ Set TenantContext containing (ProjectID, UserID, UserRole)
 //          │
 //          ▼
 // [Action] Attach context to Go's Request Context (this triggers Postgres RLS)
@@ -45,7 +47,10 @@ const (
 // with your database storage repositories (withTenantTx). This ensures that PostgreSQL Row-Level Security (RLS)
 // restricts queries to only return data belonging to that specific project_id.
 
-func ProjectScope(membershipRepo *storage.MembershipRepo) gin.HandlerFunc {
+// ProjectScope validates that the calling admin belongs to the project
+// in the URL, sets tenant context for RLS, and rejects requests against
+// a suspended project — even with an otherwise-valid JWT and membership.
+func ProjectScope(membershipRepo *storage.MembershipRepo, projectRepo *storage.ProjectRepo) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectIDStr := c.Param("projectId")
 		if projectIDStr == "" {
@@ -85,6 +90,25 @@ func ProjectScope(membershipRepo *storage.MembershipRepo) gin.HandlerFunc {
 			}
 			// DB error — log but don't expose
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+
+		// Suspension check — runs AFTER membership validation so a
+		// suspended project still correctly returns 403 even for its
+		// own members, including a valid, unexpired JWT issued before
+		// the suspension. The token's cryptographic validity is
+		// irrelevant here; the DB flag is the source of truth.
+		active, err := projectRepo.IsActive(c.Request.Context(), projectID.String())
+		if err != nil {
+			if errors.Is(err, storage.ErrProjectNotFound) {
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "project not found"})
+				return
+			}
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		if !active {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "project suspended"})
 			return
 		}
 

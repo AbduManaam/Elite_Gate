@@ -63,6 +63,9 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
 	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr)
 	syncHandler := handler.NewSyncHandler(gatewayRepo, logger)
+	platformHandler := handler.NewPlatformHandler(
+		projectRepo, gatewayRepo, authRepo, containerMgr, syncHandler, logger,
+	)
 
 	var ipAllowlist gin.HandlerFunc
 	if len(cfg.Server.AdminIPAllowlist) > 0 {
@@ -105,8 +108,24 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		v1.DELETE("/projects/:projectId", projectHandler.Delete)
 		v1.POST("/reload", syncHandler.Reload)
 
+		// ── Platform-operator-only routes ───────────────────────────────────
+		// Cross-tenant. SuperAdminOnly gates every route in this group —
+		// there is no per-handler authorization check, the gate is here, once.
+		platform := v1.Group("/platform")
+		platform.Use(middleware.SuperAdminOnly(authRepo, logger))
+		{
+			platform.GET("/projects",                                 platformHandler.ListTenants)
+			platform.DELETE("/projects/:projectId",                   platformHandler.DeleteTenant)
+			platform.GET("/health",                                   platformHandler.PlatformHealth)
+			platform.GET("/metrics",                                  platformHandler.PlatformMetrics)
+			platform.PATCH("/projects/:projectId/suspend",            platformHandler.SuspendTenant)
+			platform.PATCH("/projects/:projectId/reactivate",         platformHandler.ReactivateTenant)
+			platform.POST("/gateways/:gatewayId/restart",             platformHandler.RestartGateway)
+			platform.POST("/gateways/:gatewayId/force-decommission",  platformHandler.ForceDecommission)
+		}
+
 		projectGroup := v1.Group("/projects/:projectId")
-		projectGroup.Use(middleware.ProjectScope(membershipRepo))
+		projectGroup.Use(middleware.ProjectScope(membershipRepo, projectRepo))
 		{
 			routes := projectGroup.Group("/routes")
 			{

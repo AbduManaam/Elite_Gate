@@ -1,4 +1,4 @@
-package storage
+﻿package storage
 
 import (
 	"context"
@@ -177,6 +177,53 @@ func (r *ProjectRepo) Update(ctx context.Context, id string, p *model.Project) e
 	return nil
 }
 
+// ListAllGlobal returns every non-deleted project in the system, regardless
+// of ownership or membership. This intentionally bypasses RLS — it queries
+// r.db directly instead of going through withTenantTx, because there is no
+// single tenant context for a platform-wide operator view.
+//
+// Platform-operator use only. Callers MUST be gated by SuperAdminOnly
+// middleware before this method is ever reachable.
+func (r *ProjectRepo) ListAllGlobal(ctx context.Context) ([]model.Project, error) {
+	r.logger.Debug().Msg("ListAllGlobal: querying all projects platform-wide")
+
+	const q = `
+		SELECT
+			id, name, slug, COALESCE(description, ''),
+			owner_id, is_active, plan, created_at, updated_at
+		FROM projects
+		WHERE deleted_at IS NULL
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("ListAllGlobal: query failed")
+		return nil, fmt.Errorf("list all projects: %w", err)
+	}
+	defer rows.Close()
+
+	projects := make([]model.Project, 0)
+	for rows.Next() {
+		var p model.Project
+		if err := rows.Scan(
+			&p.ID, &p.Name, &p.Slug, &p.Description,
+			&p.OwnerID, &p.IsActive, &p.Plan,
+			&p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			r.logger.Error().Err(err).Msg("ListAllGlobal: failed to scan project row")
+			return nil, fmt.Errorf("scan project row: %w", err)
+		}
+		projects = append(projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		r.logger.Error().Err(err).Msg("ListAllGlobal: row iteration error")
+		return nil, fmt.Errorf("iterate project rows: %w", err)
+	}
+
+	r.logger.Debug().Int("count", len(projects)).Msg("ListAllGlobal: projects fetched successfully")
+	return projects, nil
+}
+
 // Soft-delete a project, API keys, and routes.
 // Keeps related data consistent.
 func (r *ProjectRepo) Delete(ctx context.Context, id string) error {
@@ -253,4 +300,110 @@ func (r *ProjectRepo) Delete(ctx context.Context, id string) error {
 	committed = true
 	r.logger.Info().Str("project_id", id).Msg("Delete: project and all its child resources soft-deleted successfully")
 	return nil
+}
+
+// ProjectCounts holds platform-wide tenant activation counts.
+type ProjectCounts struct {
+	Active    int `json:"active"`
+	Suspended int `json:"suspended"`
+	Total     int `json:"total"`
+}
+
+// GlobalCounts returns active/suspended/total project counts platform-wide.
+// Bypasses RLS � platform-operator use only.
+func (r *ProjectRepo) GlobalCounts(ctx context.Context) (ProjectCounts, error) {
+	const q = `
+		SELECT
+			COUNT(*) FILTER (WHERE is_active = TRUE)  AS active,
+			COUNT(*) FILTER (WHERE is_active = FALSE) AS suspended,
+			COUNT(*)                                   AS total
+		FROM projects
+		WHERE deleted_at IS NULL
+	`
+	var counts ProjectCounts
+	err := r.db.QueryRowContext(ctx, q).Scan(&counts.Active, &counts.Suspended, &counts.Total)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("GlobalCounts: query failed")
+		return ProjectCounts{}, fmt.Errorf("GlobalCounts: %w", err)
+	}
+	return counts, nil
+}
+
+// PlatformMetricsSnapshot returns platform-wide counts across tenants,
+// routes, upstreams, API keys, and admin users in a single pass.
+// Platform-operator use only. Bypasses RLS � cross-tenant aggregation.
+func (r *ProjectRepo) PlatformMetricsSnapshot(ctx context.Context) (map[string]any, error) {
+	const q = `
+		SELECT
+			(SELECT COUNT(*) FROM projects  WHERE deleted_at IS NULL)                       AS total_tenants,
+			(SELECT COUNT(*) FROM routes    WHERE deleted_at IS NULL)                       AS total_routes,
+			(SELECT COUNT(*) FROM upstreams WHERE deleted_at IS NULL)                       AS total_upstreams,
+			(SELECT COUNT(*) FROM api_keys  WHERE deleted_at IS NULL AND status = 'active') AS active_api_keys,
+			(SELECT COUNT(*) FROM api_keys  WHERE status = 'revoked')                       AS revoked_api_keys,
+			(SELECT COUNT(*) FROM admin_users)                                              AS total_admin_users
+	`
+	var totalTenants, totalRoutes, totalUpstreams, activeKeys, revokedKeys, totalAdmins int
+	err := r.db.QueryRowContext(ctx, q).Scan(
+		&totalTenants, &totalRoutes, &totalUpstreams, &activeKeys, &revokedKeys, &totalAdmins,
+	)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("PlatformMetricsSnapshot: query failed")
+		return nil, fmt.Errorf("PlatformMetricsSnapshot: %w", err)
+	}
+
+	return map[string]any{
+		"total_tenants":     totalTenants,
+		"total_routes":      totalRoutes,
+		"total_upstreams":   totalUpstreams,
+		"active_api_keys":   activeKeys,
+		"revoked_api_keys":  revokedKeys,
+		"total_admin_users": totalAdmins,
+	}, nil
+}
+
+// Suspend marks a project inactive platform-wide. Bypasses RLS � operator
+// action. Enforcement happens in ProjectScope middleware via IsActive check.
+func (r *ProjectRepo) Suspend(ctx context.Context, projectID string) error {
+	const q = `UPDATE projects SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, projectID)
+	if err != nil {
+		r.logger.Error().Err(err).Str("project_id", projectID).Msg("Suspend: update failed")
+		return fmt.Errorf("suspend project %s: %w", projectID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrProjectNotFound
+	}
+	return nil
+}
+
+// Reactivate reverses Suspend, marking a project active again.
+func (r *ProjectRepo) Reactivate(ctx context.Context, projectID string) error {
+	const q = `UPDATE projects SET is_active = TRUE, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, projectID)
+	if err != nil {
+		r.logger.Error().Err(err).Str("project_id", projectID).Msg("Reactivate: update failed")
+		return fmt.Errorf("reactivate project %s: %w", projectID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrProjectNotFound
+	}
+	return nil
+}
+
+// IsActive checks a single project's activation flag. Used by
+// ProjectScope middleware to block suspended tenants on every request.
+func (r *ProjectRepo) IsActive(ctx context.Context, projectID string) (bool, error) {
+	const q = `SELECT is_active FROM projects WHERE id = $1 AND deleted_at IS NULL`
+	var active bool
+	err := r.db.QueryRowContext(ctx, q, projectID).Scan(&active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrProjectNotFound
+	}
+	if err != nil {
+		r.logger.Error().Err(err).Str("project_id", projectID).Msg("IsActive: query failed")
+		return false, fmt.Errorf("IsActive project %s: %w", projectID, err)
+	}
+	return active, nil
 }

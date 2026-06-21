@@ -1,4 +1,4 @@
-package storage
+﻿package storage
 
 import (
 	"context"
@@ -217,4 +217,69 @@ func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
 
 	r.logger.Debug().Int("count", len(gateways)).Msg("ListActive: query successful")
 	return gateways, nil
+}
+
+// CountByStatus returns the number of non-deleted gateways grouped by
+// their current status (provisioning/active/failed/decommissioned).
+// Used by the platform-wide health endpoint.
+func (r *GatewayRepo) CountByStatus(ctx context.Context) (map[string]int, error) {
+	r.logger.Debug().Msg("CountByStatus: aggregating gateway counts by status")
+
+	const q = `
+		SELECT status, COUNT(*)
+		FROM   gateways
+		WHERE  deleted_at IS NULL
+		GROUP BY status
+	`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("CountByStatus: query failed")
+		return nil, fmt.Errorf("CountByStatus gateways: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			r.logger.Error().Err(err).Msg("CountByStatus: failed to scan row")
+			return nil, fmt.Errorf("scan gateway status count: %w", err)
+		}
+		counts[status] = count
+	}
+	if err := rows.Err(); err != nil {
+		r.logger.Error().Err(err).Msg("CountByStatus: row iteration error")
+		return nil, fmt.Errorf("iterate gateway status counts: %w", err)
+	}
+
+	return counts, nil
+}
+
+// GetByExternalID looks up a single gateway by its human-readable external
+// ID (e.g. "gw_a1b2c3d4"). Used by the platform restart and
+// force-decommission endpoints to resolve a single target before acting.
+func (r *GatewayRepo) GetByExternalID(ctx context.Context, externalID string) (*GatewayRecord, error) {
+	r.logger.Debug().Str("external_id", externalID).Msg("GetByExternalID: looking up gateway")
+
+	const q = `
+		SELECT id, project_id::text, external_id, endpoint_ip, gateway_port, plan, status
+		FROM   gateways
+		WHERE  external_id = $1
+		  AND  deleted_at  IS NULL
+	`
+	var g GatewayRecord
+	err := r.db.QueryRowContext(ctx, q, externalID).Scan(
+		&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		r.logger.Warn().Str("external_id", externalID).Msg("GetByExternalID: gateway not found")
+		return nil, ErrGatewayNotFound
+	}
+	if err != nil {
+		r.logger.Error().Err(err).Str("external_id", externalID).Msg("GetByExternalID: query failed")
+		return nil, fmt.Errorf("GetByExternalID gateway %s: %w", externalID, err)
+	}
+
+	return &g, nil
 }
