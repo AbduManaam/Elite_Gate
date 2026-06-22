@@ -53,14 +53,16 @@ func StartApp(cfg *config.Config) (*App, error) {
 		rdb = nil
 	}
 
-	// Setup dynamic route loader
+	// Setup dynamic route loader to refresh routes and upstream pools on reload.
 	routeRepo := storage.NewRouteRepo(db, logger)
+	upstreamRepo := storage.NewUpstreamRepo(db, logger)
+	upstreamTargetRepo := storage.NewUpstreamTargetRepo(db, logger)
 	reloadInterval, err := time.ParseDuration(cfg.Server.RouteReloadInterval)
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to parse route reload interval; defaulting to 10s")
 		reloadInterval = 10 * time.Second
 	}
-	loader := runtime.NewLoader(routeRepo, logger, reloadInterval)
+	loader := runtime.NewLoader(routeRepo, upstreamTargetRepo, upstreamRepo, logger, reloadInterval)
 
 	loaderCtx := context.Background()
 	if cfg.Server.ProjectID != "" {
@@ -73,6 +75,19 @@ func StartApp(cfg *config.Config) (*App, error) {
 		}
 	}
 
+	// ── Health Checker ────────────────────────────────────────────────────
+	// Created before loader.Start() and wired into the loader so the very
+	// first reload registers every backend target (from every upstream's
+	// LB pool) for probing — not just the legacy single-target case.
+	hc := health.New(
+		10*time.Second, // probe every 10 seconds
+		"/health",      // health endpoint path on each upstream
+		3*time.Second,  // per-probe HTTP timeout
+		logger,
+	)
+	loader.SetHealthChecker(hc)
+	// ─────────────────────────────────────────────────────────────────────
+
 	if err := loader.Start(loaderCtx); err != nil {
 		if rdb != nil {
 			_ = rdb.Close()
@@ -81,22 +96,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to start route loader: %w", err)
 	}
 
-	// ── Health Checker ────────────────────────────────────────────────────
-	// Create the checker, register every upstream from the current route
-	// snapshot, then start the background probe loop.
-	hc := health.New(
-		10*time.Second, // probe every 10 seconds
-		"/health",      // health endpoint path on each upstream
-		3*time.Second,  // per-probe HTTP timeout
-		logger,
-	)
-	for _, rt := range loader.Current().Routes {
-		if rt.Enabled && rt.UpstreamURL != "" {
-			hc.Register(rt.UpstreamURL)
-		}
-	}
 	hc.Start(loaderCtx) // stops automatically when loaderCtx is cancelled (shutdown)
-	// ─────────────────────────────────────────────────────────────────────
 
 	// Injected shared security configurations
 	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)

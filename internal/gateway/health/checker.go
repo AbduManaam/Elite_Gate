@@ -66,6 +66,36 @@ func (c *Checker) Register(baseURL string) {
 		Msg("health: registered new upstream")
 }
 
+func (c *Checker) RegisterAll(urls []string) {
+	for _, u := range urls {
+		c.Register(u)
+	}
+}
+
+// if a server is removed from an upstream pool, this function automatically stops the Health Checking for that server
+func (c *Checker) SyncTargets(desired []string) {
+	want := make(map[string]struct{}, len(desired))
+	for _, u := range desired {
+		want[u] = struct{}{}
+	}
+
+	c.mu.RLock()
+	var toRemove []string
+	for existing := range c.statuses {
+		if _, keep := want[existing]; !keep {
+			toRemove = append(toRemove, existing)
+		}
+	}
+	c.mu.RUnlock()
+
+	for _, u := range desired {
+		c.Register(u)
+	}
+	for _, u := range toRemove {
+		c.Unregister(u)
+	}
+}
+
 // Unregister removes an upstream from the watch list.
 func (c *Checker) Unregister(baseURL string) {
 	c.mu.Lock()

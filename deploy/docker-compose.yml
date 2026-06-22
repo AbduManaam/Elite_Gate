@@ -1,7 +1,6 @@
 #Infrastructure configuration file
 #Infrastructure configuration file
 
-version: "3.9"
 
 services:
   postgres:
@@ -71,9 +70,7 @@ services:
       - ../.env
     volumes:
       - ../logs:/app/logs
-      - type: npipe
-        source: \\.\pipe\docker_engine
-        target: //./pipe/docker_engine
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,4 +112,4 @@ volumes:
 networks:
   elitegate_net:
     name: elitegate_net
-    driver: bridge
+    external: true

@@ -25,7 +25,7 @@ func NewRouter(
 	limiter ratelimit.Limiter,
 	hc *health.Checker,
 ) (http.Handler, error) {
-	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap, hc)
+	dynamic := handler.NewDynamicProxy(loader, cfg.Server.DevHostMap, hc, logger)
 	rlMiddleware := middleware.NewRateLimitMiddleware(limiter)
 
 	mux := http.NewServeMux()
@@ -57,7 +57,7 @@ func NewRouter(
 	apiHandler := middleware.Chain(
 		dynamic,
 		middleware.RouteMatcher(loader),
-		middleware.CORS, // Mounted immediately after RouteMatcher
+		middleware.CORS,
 		middleware.IPFilter,
 		authMiddleware.Middleware,
 		rlMiddleware.Middleware,
