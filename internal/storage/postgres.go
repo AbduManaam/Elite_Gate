@@ -16,21 +16,18 @@ import (
 func NewPostgres(logger zerolog.Logger, cfg config.DatabaseConfig) (*sql.DB, error) {
 	dsn := cfg.DSN
 	if dsn == "" {
-		logger.Error().Msg("database DSN is empty")
 		return nil, fmt.Errorf("database DSN is empty")
 	}
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to open connection to DB")
-		return nil, err
+		return nil, fmt.Errorf("open database connection: %w", err)
 	}
 
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 
 	if err := db.Ping(); err != nil {
-		logger.Error().Err(err).Msg("postgres ping failed")
 		return nil, fmt.Errorf("postgres ping failed: %w", err)
 	}
 

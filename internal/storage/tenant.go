@@ -99,9 +99,6 @@ func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID u
 		userID.String(),
 	)
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("project_id", projectID.String()).
-			Msg("failed to set postgres tenant session variables")
 		return fmt.Errorf("setTenantSession: %w", err)
 	}
 	return nil
@@ -140,13 +137,11 @@ Set this value only for the current transaction.*/
 func (r *BaseRepo) withTenantTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
-		r.logger.Warn().Err(err).Msg("tenant context extraction failed")
 		return err
 	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		r.logger.Error().Err(err).Msg("failed to start database transaction")
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() // Safe: no-op if transaction has committed
@@ -163,9 +158,6 @@ func (r *BaseRepo) withTenantTx(ctx context.Context, fn func(tx *sql.Tx) error) 
 	}
 
 	if err := tx.Commit(); err != nil {
-		r.logger.Error().Err(err).
-			Str("project_id", tc.ProjectID.String()).
-			Msg("failed to commit transaction")
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
@@ -205,16 +197,9 @@ func (r *MembershipRepo) ValidateMembership(ctx context.Context, projectID, user
 	var role string
 	err := r.db.QueryRowContext(ctx, q, projectID, userID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		r.logger.Warn().
-			Str("project_id", projectID.String()).
-			Str("user_id", userID.String()).
-			Msg("user is not a member of project or project/user is inactive")
 		return "", ErrForbidden
 	}
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("project_id", projectID.String()).
-			Msg("membership validation query failed")
 		return "", fmt.Errorf("ValidateMembership: %w", err)
 	}
 

@@ -157,7 +157,6 @@ func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
 	})
 
 	if err != nil {
-		r.logger.Error().Err(err).Str("path", rt.Path).Msg("Create: failed to insert route")
 		return err
 	}
 
@@ -192,7 +191,6 @@ func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) erro
 	})
 
 	if err != nil {
-		r.logger.Error().Err(err).Str("route_id", id).Msg("Update: failed to update route")
 		return err
 	}
 
@@ -216,7 +214,6 @@ func (r *RouteRepo) Delete(ctx context.Context, id string) error {
 	})
 
 	if err != nil {
-		r.logger.Error().Err(err).Str("route_id", id).Msg("Delete: failed to delete route")
 		return err
 	}
 
@@ -301,7 +298,6 @@ func (r *RouteRepo) Disable(ctx context.Context, id string) error {
 	})
 
 	if err != nil {
-		r.logger.Error().Err(err).Str("route_id", id).Msg("Disable: failed to disable route")
 		return err
 	}
 

@@ -205,7 +205,6 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, u *model.Upstream)
 		return ErrUpstreamNotFound
 	}
 	if err != nil {
-		r.logger.Error().Err(err).Str("upstream_id", id).Msg("failed to update upstream")
 		return fmt.Errorf("Update upstream %s: %w", id, err)
 	}
 
@@ -248,7 +247,6 @@ func (r *UpstreamRepo) Disable(ctx context.Context, id string) error {
 		return err
 	}
 	if err != nil {
-		r.logger.Error().Err(err).Str("upstream_id", id).Msg("failed to disable upstream")
 		return fmt.Errorf("Disable upstream %s: %w", id, err)
 	}
 
@@ -292,7 +290,6 @@ func (r *UpstreamRepo) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if err != nil {
-		r.logger.Error().Err(err).Str("upstream_id", id).Msg("failed to delete upstream")
 		return fmt.Errorf("Delete upstream %s: %w", id, err)
 	}
 

@@ -48,6 +48,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	// Repositories initialized
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
+	upstreamTargetRepo := storage.NewUpstreamTargetRepo(db, logger)
 	policyRepo := storage.NewPolicyRepo(db)
 	projectRepo := storage.NewProjectRepo(db, logger)
 	apiKeyRepo := storage.NewApiKeyRepo(db)
@@ -57,6 +58,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	// Handlers initialized
 	routeHandler := handler.NewRouteHandler(routeRepo, logger)
 	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger)
+	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamTargetRepo, logger)
 	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger)
 	projectHandler := handler.NewProjectHandler(projectRepo, logger)
 	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger)
@@ -114,14 +116,14 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		platform := v1.Group("/platform")
 		platform.Use(middleware.SuperAdminOnly(authRepo, logger))
 		{
-			platform.GET("/projects",                                 platformHandler.ListTenants)
-			platform.DELETE("/projects/:projectId",                   platformHandler.DeleteTenant)
-			platform.GET("/health",                                   platformHandler.PlatformHealth)
-			platform.GET("/metrics",                                  platformHandler.PlatformMetrics)
-			platform.PATCH("/projects/:projectId/suspend",            platformHandler.SuspendTenant)
-			platform.PATCH("/projects/:projectId/reactivate",         platformHandler.ReactivateTenant)
-			platform.POST("/gateways/:gatewayId/restart",             platformHandler.RestartGateway)
-			platform.POST("/gateways/:gatewayId/force-decommission",  platformHandler.ForceDecommission)
+			platform.GET("/projects", platformHandler.ListTenants)
+			platform.DELETE("/projects/:projectId", platformHandler.DeleteTenant)
+			platform.GET("/health", platformHandler.PlatformHealth)
+			platform.GET("/metrics", platformHandler.PlatformMetrics)
+			platform.PATCH("/projects/:projectId/suspend", platformHandler.SuspendTenant)
+			platform.PATCH("/projects/:projectId/reactivate", platformHandler.ReactivateTenant)
+			platform.POST("/gateways/:gatewayId/restart", platformHandler.RestartGateway)
+			platform.POST("/gateways/:gatewayId/force-decommission", platformHandler.ForceDecommission)
 		}
 
 		projectGroup := v1.Group("/projects/:projectId")
@@ -145,6 +147,13 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				upstreams.PUT("/:id", middleware.RBAC(middleware.RoleEditor), upstreamHandler.Update)
 				upstreams.PATCH("/:id/disable", middleware.RBAC(middleware.RoleEditor), upstreamHandler.Disable)
 				upstreams.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), upstreamHandler.Delete)
+
+				targets := upstreams.Group("/:id/targets")
+				{
+					targets.GET("", middleware.RBAC(middleware.RoleViewer), upstreamTargetHandler.List)
+					targets.POST("", middleware.RBAC(middleware.RoleEditor), upstreamTargetHandler.Add)
+					targets.DELETE("/:targetId", middleware.RBAC(middleware.RoleEditor), upstreamTargetHandler.Remove)
+				}
 			}
 			policies := projectGroup.Group("/policies")
 			{

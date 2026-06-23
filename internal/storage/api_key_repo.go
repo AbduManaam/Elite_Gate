@@ -111,10 +111,6 @@ func (r *ApiKeyRepo) Create(
 			Scan(&rec.ID, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt)
 	})
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("name", name).
-			Msg("Create: failed to insert api_key")
 		return nil, fmt.Errorf("api_key create: %w", err)
 	}
 
@@ -160,16 +156,9 @@ func (r *ApiKeyRepo) Revoke(ctx context.Context, keyID string) error {
 		return nil
 	})
 	if errors.Is(err, ErrAPIKeyNotFound) {
-		r.logger.Warn().
-			Str("key_id", keyID).
-			Msg("Revoke: api_key not found or already revoked")
 		return ErrAPIKeyNotFound
 	}
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("key_id", keyID).
-			Msg("Revoke: database update failed")
 		return fmt.Errorf("api_key revoke %s: %w", keyID, err)
 	}
 
@@ -242,16 +231,9 @@ func (r *ApiKeyRepo) Rotate(
 			Scan(&newRec.ID, &newRec.Status, &newRec.CreatedAt, &newRec.UpdatedAt)
 	})
 	if errors.Is(err, ErrAPIKeyNotFound) {
-		r.logger.Warn().
-			Str("old_key_id", oldKeyID).
-			Msg("Rotate: old api_key not found")
 		return nil, ErrAPIKeyNotFound
 	}
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("old_key_id", oldKeyID).
-			Msg("Rotate: rotation transaction failed")
 		return nil, fmt.Errorf("api_key rotate: %w", err)
 	}
 
@@ -295,11 +277,9 @@ func (r *ApiKeyRepo) GetByID(ctx context.Context, keyID string) (*ApiKeyRecord, 
 		)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		r.logger.Warn().Str("key_id", keyID).Msg("GetByID: api_key not found")
 		return nil, ErrAPIKeyNotFound
 	}
 	if err != nil {
-		r.logger.Error().Err(err).Str("key_id", keyID).Msg("GetByID: query failed")
 		return nil, fmt.Errorf("api_key get %s: %w", keyID, err)
 	}
 
@@ -351,7 +331,6 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 		return rows.Err()
 	})
 	if err != nil {
-		r.logger.Error().Err(err).Msg("ListAll: query failed")
 		return nil, fmt.Errorf("api_key list: %w", err)
 	}
 
@@ -398,10 +377,6 @@ func (r *ApiKeyRepo) FindByHash(
 		return nil, nil // cache miss → caller treats as invalid
 	}
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("hash_prefix", safePrefix(hash, 8)).
-			Msg("FindByHash: database query failed")
 		return nil, fmt.Errorf("api_key find by hash: %w", err)
 	}
 

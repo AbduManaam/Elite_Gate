@@ -25,20 +25,17 @@ func (h *SyncHandler) reloadOne(ctx context.Context, g storage.GatewayRecord) er
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, nil)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to build reload request")
 		return fmt.Errorf("gateway %s: failed to build request: %w", g.ID, err)
 	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Error().Err(err).Msg("reload request failed")
 		return fmt.Errorf("gateway %s: request failed: %w", g.ID, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Warn().Int("status", resp.StatusCode).Msg("reload returned non-200")
 		return fmt.Errorf("gateway %s: unexpected status %d", g.ID, resp.StatusCode)
 	}
 

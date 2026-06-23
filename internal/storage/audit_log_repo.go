@@ -41,7 +41,6 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
-		r.logger.Error().Err(err).Msg("create: missing tenant context")
 		return err
 	}
 
@@ -59,13 +58,6 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 		log.EntityID,
 		log.Changes,
 	).Scan(&log.ID, &log.CreatedAt); err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("project_id", tc.ProjectID.String()).
-			Str("action", log.Action).
-			Str("entity_type", log.EntityType).
-			Str("entity_id", log.EntityID).
-			Msg("create: failed to insert audit log")
 		return fmt.Errorf("audit_log create: %w", err)
 	}
 
@@ -85,7 +77,6 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]model.AuditLog, error) {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
-		r.logger.Error().Err(err).Msg("list: missing tenant context")
 		return nil, err
 	}
 
@@ -119,10 +110,6 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 
 	rows, err := r.db.QueryContext(ctx, q, tc.ProjectID, limit, offset)
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Str("project_id", tc.ProjectID.String()).
-			Msg("list: query failed")
 		return nil, fmt.Errorf("audit_log list: %w", err)
 	}
 	defer rows.Close()
@@ -135,13 +122,11 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 			&l.Action, &l.EntityType, &l.EntityID,
 			&l.Changes, &l.CreatedAt,
 		); err != nil {
-			r.logger.Error().Err(err).Msg("list: scan failed")
 			return nil, fmt.Errorf("audit_log list scan: %w", err)
 		}
 		logs = append(logs, l)
 	}
 	if err := rows.Err(); err != nil {
-		r.logger.Error().Err(err).Msg("list: rows iteration error")
 		return nil, fmt.Errorf("audit_log list rows: %w", err)
 	}
 
@@ -176,18 +161,12 @@ func (r *AuditLogRepo) PruneAuditLogs(ctx context.Context, olderThan time.Durati
 
 	result, err := r.db.ExecContext(ctx, q, seconds)
 	if err != nil {
-		r.logger.Error().
-			Err(err).
-			Int64("older_than_seconds", seconds).
-			Msg("prune: delete query failed")
 		return 0, fmt.Errorf("audit_log prune: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		// Non-fatal; log and return 0 count.
-		r.logger.Warn().Err(err).Msg("prune: could not retrieve rows affected")
-		return 0, nil
+		return 0, fmt.Errorf("audit_log prune: get rows affected: %w", err)
 	}
 
 	r.logger.Info().

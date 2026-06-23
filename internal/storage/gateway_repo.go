@@ -74,9 +74,6 @@ func (r *GatewayRepo) Provision(ctx context.Context, externalID, projectID, plan
 	`
 	_, err := r.db.ExecContext(ctx, q, externalID, projectID, plan)
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("Provision: failed to insert gateway row")
 		return fmt.Errorf("Provision gateway: %w", err)
 	}
 	return nil
@@ -102,16 +99,10 @@ func (r *GatewayRepo) Register(ctx context.Context, externalID, ip, port string)
 	`
 	res, err := r.db.ExecContext(ctx, q, externalID, ip, port)
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("Register: database update failed")
 		return fmt.Errorf("Register gateway: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		r.logger.Warn().
-			Str("external_id", externalID).
-			Msg("Register: gateway record not found")
 		return ErrGatewayNotFound
 	}
 	return nil
@@ -134,17 +125,10 @@ func (r *GatewayRepo) UpdateStatus(ctx context.Context, externalID, status strin
 	`
 	res, err := r.db.ExecContext(ctx, q, externalID, status)
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Str("status", status).
-			Msg("UpdateStatus: database update failed")
 		return fmt.Errorf("UpdateStatus gateway %s → %s: %w", externalID, status, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		r.logger.Warn().
-			Str("external_id", externalID).
-			Msg("UpdateStatus: gateway record not found")
 		return ErrGatewayNotFound
 	}
 	return nil
@@ -166,16 +150,10 @@ func (r *GatewayRepo) Decommission(ctx context.Context, externalID string) error
 	`
 	res, err := r.db.ExecContext(ctx, q, externalID)
 	if err != nil {
-		r.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("Decommission: database update failed")
 		return fmt.Errorf("Decommission gateway: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		r.logger.Warn().
-			Str("external_id", externalID).
-			Msg("Decommission: gateway record not found")
 		return ErrGatewayNotFound
 	}
 	return nil
@@ -195,7 +173,6 @@ func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
 	`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
-		r.logger.Error().Err(err).Msg("ListActive: query failed")
 		return nil, fmt.Errorf("ListActive gateways: %w", err)
 	}
 	defer rows.Close()
@@ -204,14 +181,12 @@ func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
 	for rows.Next() {
 		var g GatewayRecord
 		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status); err != nil {
-			r.logger.Error().Err(err).Msg("ListActive: failed to scan gateway row")
 			return nil, fmt.Errorf("scan gateway row: %w", err)
 		}
 		gateways = append(gateways, g)
 	}
 
 	if err := rows.Err(); err != nil {
-		r.logger.Error().Err(err).Msg("ListActive: row iteration error")
 		return nil, fmt.Errorf("iterate gateway rows: %w", err)
 	}
 
@@ -233,7 +208,6 @@ func (r *GatewayRepo) CountByStatus(ctx context.Context) (map[string]int, error)
 	`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
-		r.logger.Error().Err(err).Msg("CountByStatus: query failed")
 		return nil, fmt.Errorf("CountByStatus gateways: %w", err)
 	}
 	defer rows.Close()
@@ -243,13 +217,11 @@ func (r *GatewayRepo) CountByStatus(ctx context.Context) (map[string]int, error)
 		var status string
 		var count int
 		if err := rows.Scan(&status, &count); err != nil {
-			r.logger.Error().Err(err).Msg("CountByStatus: failed to scan row")
 			return nil, fmt.Errorf("scan gateway status count: %w", err)
 		}
 		counts[status] = count
 	}
 	if err := rows.Err(); err != nil {
-		r.logger.Error().Err(err).Msg("CountByStatus: row iteration error")
 		return nil, fmt.Errorf("iterate gateway status counts: %w", err)
 	}
 
@@ -273,11 +245,9 @@ func (r *GatewayRepo) GetByExternalID(ctx context.Context, externalID string) (*
 		&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		r.logger.Warn().Str("external_id", externalID).Msg("GetByExternalID: gateway not found")
 		return nil, ErrGatewayNotFound
 	}
 	if err != nil {
-		r.logger.Error().Err(err).Str("external_id", externalID).Msg("GetByExternalID: query failed")
 		return nil, fmt.Errorf("GetByExternalID gateway %s: %w", externalID, err)
 	}
 
