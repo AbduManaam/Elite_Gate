@@ -94,8 +94,12 @@ func (h *RouteHandler) Create(c *gin.Context) {
 		Msg("creating route in database")
 
 	if err := h.repo.Create(c.Request.Context(), rt); err != nil {
+		if errors.Is(err, storage.ErrRouteNameConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "route name already exists"})
+			return
+		}
 		h.logger.Error().Err(err).Str("path", rt.Path).Msg("failed to create route")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 

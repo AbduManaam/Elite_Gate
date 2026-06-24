@@ -40,8 +40,8 @@ const listQuery = `
 		r.created_at,
 		r.updated_at
 	FROM   routes r
-	LEFT JOIN upstreams u ON u.id = r.upstream_id
-	LEFT JOIN policies  p ON p.id = r.policy_id
+	LEFT JOIN upstreams u ON u.id = r.upstream_id AND u.deleted_at IS NULL
+	LEFT JOIN policies  p ON p.id = r.policy_id AND p.deleted_at IS NULL
 `
 
 func (r *RouteRepo) ListEnabled(ctx context.Context) ([]model.Route, error) {
@@ -151,9 +151,16 @@ func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			RETURNING id, created_at, updated_at
 		`
-		return tx.QueryRowContext(ctx, q,
+		err = tx.QueryRowContext(ctx, q,
 			tc.ProjectID, rt.Name, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled, pq.Array(rt.Methods),
 		).Scan(&rt.ID, &rt.CreatedAt, &rt.UpdatedAt)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrRouteNameConflict
+			}
+			return err
+		}
+		return nil
 	})
 
 	if err != nil {
@@ -305,4 +312,7 @@ func (r *RouteRepo) Disable(ctx context.Context, id string) error {
 	return nil
 }
 
-var ErrRouteNotFound = errors.New("route not found")
+var (
+	ErrRouteNotFound     = errors.New("route not found")
+	ErrRouteNameConflict = errors.New("route name already exists")
+)

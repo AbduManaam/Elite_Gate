@@ -116,7 +116,7 @@ func (m *DockerContainerManager) Close() error {
 
 // Provision: Creates and starts a new gateway container for a project.
 // Waits until the container is healthy.
-// Returns the container's IP address and port.
+// Returns an endpoint reachable from the admin process.
 func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, projectID, plan string) (endpointIP string, gatewayPort string, err error) {
 	m.logger.Info().
 		Str("gateway_id", gatewayID).
@@ -231,7 +231,7 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 	return ip, port, nil
 }
 
-// Gets the container's IP address and the host port assigned by Docker.
+// Gets the endpoint the admin process should use to reach the gateway.
 func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerID string) (ip string, port string, err error) {
 	info, err := m.client.ContainerInspect(ctx, containerID)
 	if err != nil {
@@ -255,7 +255,18 @@ func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerI
 		return "", "", fmt.Errorf("container has no IP address on network %q", m.networkName)
 	}
 
-	return containerIP, hostPort, nil
+	if runningInContainer() {
+		return containerIP, gatewayContainerPort.Port(), nil
+	}
+
+	return "localhost", hostPort, nil
+}
+
+func runningInContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return false
 }
 
 // Decommission: Stops and removes a gateway container.

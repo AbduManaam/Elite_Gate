@@ -143,6 +143,9 @@ func (r *PolicyRepo) Create(ctx context.Context, p *model.Policy) error {
 		).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 
 		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrPolicyNameConflict
+			}
 			return fmt.Errorf("create policy: %w", err)
 		}
 
@@ -215,6 +218,18 @@ func (r *PolicyRepo) Delete(ctx context.Context, id string) error {
 			return ErrPolicyNotFound
 		}
 
+		_, err = tx.ExecContext(ctx, `
+			UPDATE routes
+			SET    policy_id  = NULL,
+			       updated_at = NOW()
+			WHERE  policy_id  = $1
+			  AND  project_id = $2
+			  AND  deleted_at IS NULL
+		`, id, tc.ProjectID)
+		if err != nil {
+			return fmt.Errorf("clear route policy ref: %w", err)
+		}
+
 		return nil
 	})
 }
@@ -244,4 +259,7 @@ func scanPolicy(s policyScanner) (model.Policy, error) {
 	return p, nil
 }
 
-var ErrPolicyNotFound = errors.New("policy not found")
+var (
+	ErrPolicyNotFound     = errors.New("policy not found")
+	ErrPolicyNameConflict = errors.New("policy name already exists")
+)

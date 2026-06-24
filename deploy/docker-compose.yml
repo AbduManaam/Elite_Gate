@@ -40,6 +40,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/docker/gateway.Dockerfile
+    image: elitegate-gateway:latest
     container_name: elitegate_gateway
     ports:
       - "8080:8080"
@@ -63,6 +64,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/docker/admin.Dockerfile
+    image: elitegate-admin:latest
     container_name: elitegate_admin
     ports:
       - "9090:9090"

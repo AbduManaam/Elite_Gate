@@ -1,0 +1,711 @@
+{
+	"info": {
+		"name": "CoreGuard Gateway API",
+		"description": "Complete API collection for CoreGuard Gateway – Admin API + Gateway endpoints.\n\n## Authentication\nMost `/admin/v1/*` endpoints require a JWT token.\nUse `POST /admin/login` or `POST /admin/signup` to obtain tokens.\nSet `access_token` as `Authorization: Bearer <token>`.\n\n## Variables\n- `admin_url`: Base URL of the Admin API (e.g. http://localhost:8080)\n- `gateway_url`: Base URL of a Dedicated Gateway (e.g. http://localhost:9000)\n- `project_id`: Your project ID (UUID)\n- `access_token`: JWT access token (set automatically after login/signup)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "admin_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "gateway_url",
+			"value": "http://localhost:9000",
+			"type": "string"
+		},
+		{
+			"key": "project_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{access_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"item": [
+		{
+			"name": "🩺 Health & Readiness",
+			"item": [
+				{
+					"name": "GET /health (Admin)",
+					"request": {
+						"url": "{{admin_url}}/health",
+						"method": "GET",
+						"description": "Admin API liveness probe."
+					}
+				},
+				{
+					"name": "GET /ready (Admin)",
+					"request": {
+						"url": "{{admin_url}}/ready",
+						"method": "GET",
+						"description": "Admin API readiness probe."
+					}
+				},
+				{
+					"name": "GET /health (Gateway)",
+					"request": {
+						"url": "{{gateway_url}}/health",
+						"method": "GET",
+						"description": "Gateway liveness probe."
+					}
+				},
+				{
+					"name": "GET /ready (Gateway)",
+					"request": {
+						"url": "{{gateway_url}}/ready",
+						"method": "GET",
+						"description": "Gateway readiness probe."
+					}
+				}
+			]
+		},
+		{
+			"name": "🔐 Authentication (Public)",
+			"item": [
+				{
+					"name": "POST /admin/login",
+					"request": {
+						"url": "{{admin_url}}/admin/login",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"admin\",\n  \"password\": \"your-password\"\n}"
+						},
+						"description": "Login with username and password. Returns access + refresh tokens."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var json = pm.response.json();",
+									"    pm.collectionVariables.set('access_token', json.access_token);",
+									"}"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "POST /admin/refresh",
+					"request": {
+						"url": "{{admin_url}}/admin/refresh",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refresh_token\": \"your-refresh-token\"\n}"
+						},
+						"description": "Exchange a refresh token for a new access token."
+					}
+				},
+				{
+					"name": "POST /admin/logout",
+					"request": {
+						"url": "{{admin_url}}/admin/logout",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refresh_token\": \"your-refresh-token\"\n}"
+						},
+						"description": "Revoke a refresh token."
+					}
+				},
+				{
+					"name": "POST /admin/register (Bootstrap)",
+					"request": {
+						"url": "{{admin_url}}/admin/register",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"admin\",\n  \"password\": \"your-password\"\n}"
+						},
+						"description": "Register the first super-admin (bootstrap). Only works when 0 admin users exist."
+					}
+				},
+				{
+					"name": "POST /admin/signup (Self-Service Tenant)",
+					"request": {
+						"url": "{{admin_url}}/admin/signup",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"mycompany\",\n  \"password\": \"your-password\",\n  \"company\": \"My Company Inc.\",\n  \"plan\": \"free\"\n}"
+						},
+						"description": "Self-service tenant onboarding. Creates admin user + project. Returns tokens + project_id."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var json = pm.response.json();",
+									"    pm.collectionVariables.set('access_token', json.access_token);",
+									"    pm.collectionVariables.set('project_id', json.project_id);",
+									"}"
+								]
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "📋 Projects",
+			"item": [
+				{
+					"name": "POST /admin/v1/projects",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"My Project\",\n  \"slug\": \"my-project\",\n  \"description\": \"My first project\",\n  \"plan\": \"free\"\n}"
+						},
+						"description": "Create a new project."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var json = pm.response.json();",
+									"    pm.collectionVariables.set('project_id', json.project.id);",
+									"}"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "GET /admin/v1/projects",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects",
+						"method": "GET",
+						"description": "List all projects for the authenticated admin."
+					}
+				},
+				{
+					"name": "PUT /admin/v1/projects/:projectId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}",
+						"method": "PUT",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Updated Project\",\n  \"description\": \"Updated description\"\n}"
+						},
+						"description": "Update a project."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}",
+						"method": "DELETE",
+						"description": "Delete a project (Owner role required)."
+					}
+				}
+			]
+		},
+		{
+			"name": "🔄 Sync & Reload",
+			"item": [
+				{
+					"name": "POST /admin/v1/reload",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/reload",
+						"method": "POST",
+						"description": "Trigger a hot-reload of routes/upstreams/policies on ALL active gateway nodes."
+					}
+				},
+				{
+					"name": "POST /reload (Gateway Direct)",
+					"request": {
+						"url": "{{gateway_url}}/reload",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"description": "Directly reload a single gateway node's cache (internal/admin use)."
+					}
+				}
+			]
+		},
+		{
+			"name": "🔀 Routes",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/routes",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/routes",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Users API\",\n  \"path\": \"/api/users\",\n  \"upstream_id\": \"UPSTREAM_UUID\",\n  \"methods\": [\"GET\", \"POST\"],\n  \"match_type\": \"prefix\",\n  \"enabled\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "PUT /admin/v1/projects/:projectId/routes/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID",
+						"method": "PUT",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Users API\",\n  \"path\": \"/api/users\",\n  \"upstream_id\": \"UPSTREAM_UUID\",\n  \"methods\": [\"GET\", \"POST\"],\n  \"match_type\": \"prefix\",\n  \"enabled\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "PATCH /admin/v1/projects/:projectId/routes/:id/disable",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID/disable",
+						"method": "PATCH"
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/routes/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID",
+						"method": "DELETE"
+					}
+				}
+			]
+		},
+		{
+			"name": "⬆️ Upstreams",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/upstreams",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/upstreams",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"User Service\",\n  \"target_url\": \"http://user-service.internal:3000\",\n  \"protocol\": \"http\",\n  \"health_path\": \"/health\",\n  \"enabled\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "PUT /admin/v1/projects/:projectId/upstreams/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID",
+						"method": "PUT",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"User Service\",\n  \"target_url\": \"http://user-service.internal:3000\",\n  \"protocol\": \"http\",\n  \"health_path\": \"/health\",\n  \"enabled\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "GET /admin/v1/projects/:projectId/upstreams/:id/health",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/health",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "PATCH /admin/v1/projects/:projectId/upstreams/:id/disable",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/disable",
+						"method": "PATCH"
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/upstreams/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID",
+						"method": "DELETE"
+					}
+				}
+			]
+		},
+		{
+			"name": "🎯 Upstream Targets",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/upstreams/:id/targets",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/targets",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/upstreams/:id/targets",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/targets",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"target_url\": \"http://backend-1.internal:3000\",\n  \"weight\": 1,\n  \"enabled\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/upstreams/:id/targets/:targetId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/targets/TARGET_ID",
+						"method": "DELETE"
+					}
+				}
+			]
+		},
+		{
+			"name": "📜 Policies",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/policies",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/policies",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Strict Policy\",\n  \"auth_required\": true,\n  \"rate_limit_rpm\": 100,\n  \"allowed_origins\": [\"https://myapp.com\"]\n}"
+						}
+					}
+				},
+				{
+					"name": "PUT /admin/v1/projects/:projectId/policies/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies/POLICY_ID",
+						"method": "PUT",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Strict Policy\",\n  \"auth_required\": true,\n  \"rate_limit_rpm\": 200,\n  \"allowed_origins\": [\"https://myapp.com\"]\n}"
+						}
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/policies/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies/POLICY_ID",
+						"method": "DELETE"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/routes/:id/policy",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID/policy",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"policy_id\": \"POLICY_ID\"\n}"
+						},
+						"description": "Assign a policy to a route."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/routes/:id/policy",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID/policy",
+						"method": "DELETE",
+						"description": "Remove a policy from a route."
+					}
+				}
+			]
+		},
+		{
+			"name": "🔑 API Keys",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/keys",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/keys",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/keys",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/keys",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Production Key\",\n  \"expires_at\": \"2026-12-31T23:59:59Z\"\n}"
+						},
+						"description": "Create a new API key. The raw key is shown only once in the response."
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/keys/:id/rotate",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/keys/KEY_ID/rotate",
+						"method": "POST",
+						"description": "Rotate (regenerate) an API key. The old key is invalidated. New key returned in response."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/keys/:id",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/keys/KEY_ID",
+						"method": "DELETE",
+						"description": "Revoke (delete) an API key."
+					}
+				}
+			]
+		},
+		{
+			"name": "👥 Members",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/members",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members",
+						"method": "GET"
+					}
+				},
+				{
+					"name": "POST /admin/v1/projects/:projectId/members",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"admin_user_id\": \"USER_UUID\",\n  \"role\": \"editor\"\n}"
+						},
+						"description": "Add a member to the project. Role: owner | editor | viewer."
+					}
+				},
+				{
+					"name": "PUT /admin/v1/projects/:projectId/members/:memberId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members/MEMBER_ID",
+						"method": "PUT",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"viewer\"\n}"
+						},
+						"description": "Change a member's role."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/members/:memberId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members/MEMBER_ID",
+						"method": "DELETE",
+						"description": "Remove a member from the project."
+					}
+				}
+			]
+		},
+		{
+			"name": "📝 Audit Logs",
+			"item": [
+				{
+					"name": "GET /admin/v1/projects/:projectId/audit-logs",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/audit-logs",
+						"method": "GET",
+						"description": "List audit logs. Query params: ?limit=100&offset=0"
+					}
+				}
+			]
+		},
+		{
+			"name": "🌐 Gateways (Provisioning)",
+			"item": [
+				{
+					"name": "POST /admin/v1/projects/:projectId/gateways",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/gateways",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": \"{{project_id}}\",\n  \"plan\": \"free\"\n}"
+						},
+						"description": "Provision a new dedicated gateway."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/projects/:projectId/gateways/:gatewayId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/gateways/GATEWAY_ID",
+						"method": "DELETE",
+						"description": "Decommission a gateway."
+					}
+				}
+			]
+		},
+		{
+			"name": "🛡️ Platform (Super Admin Only)",
+			"item": [
+				{
+					"name": "GET /admin/v1/platform/projects",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/projects",
+						"method": "GET",
+						"description": "List all tenant projects (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "DELETE /admin/v1/platform/projects/:projectId",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/projects/{{project_id}}",
+						"method": "DELETE",
+						"description": "Delete a tenant project (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "GET /admin/v1/platform/health",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/health",
+						"method": "GET",
+						"description": "Platform-wide health check (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "GET /admin/v1/platform/metrics",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/metrics",
+						"method": "GET",
+						"description": "Platform-wide metrics (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "PATCH /admin/v1/platform/projects/:projectId/suspend",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/projects/{{project_id}}/suspend",
+						"method": "PATCH",
+						"description": "Suspend a tenant project (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "PATCH /admin/v1/platform/projects/:projectId/reactivate",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/projects/{{project_id}}/reactivate",
+						"method": "PATCH",
+						"description": "Reactivate a suspended tenant (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "POST /admin/v1/platform/gateways/:gatewayId/restart",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/gateways/GATEWAY_ID/restart",
+						"method": "POST",
+						"description": "Restart a gateway container (SuperAdmin only)."
+					}
+				},
+				{
+					"name": "POST /admin/v1/platform/gateways/:gatewayId/force-decommission",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/platform/gateways/GATEWAY_ID/force-decommission",
+						"method": "POST",
+						"description": "Force decommission a gateway (SuperAdmin only)."
+					}
+				}
+			]
+		},
+		{
+			"name": "🔧 Super Admin (User Management)",
+			"item": [
+				{
+					"name": "POST /admin/v1/admins",
+					"request": {
+						"url": "{{admin_url}}/admin/v1/admins",
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"new-admin\",\n  \"password\": \"secure-password\"\n}"
+						},
+						"description": "SuperAdmin creates a new admin user (non-super)."
+					}
+				}
+			]
+		},
+		{
+			"name": "🚀 Gateway Traffic (Dynamic Proxy)",
+			"item": [
+				{
+					"name": "GET {path} (via Gateway)",
+					"request": {
+						"url": "{{gateway_url}}/api/users",
+						"method": "GET",
+						"auth": { "type": "noauth" },
+						"description": "Send a request through the dedicated gateway. The path is matched dynamically.\nRequires API key via x-api-key header or query param.\nThis is an example — replace /api/users with any route you configured.",
+						"header": [
+							{ "key": "x-api-key", "value": "YOUR_API_KEY", "type": "default" }
+						]
+					}
+				},
+				{
+					"name": "POST {path} (via Gateway)",
+					"request": {
+						"url": "{{gateway_url}}/api/users",
+						"method": "POST",
+						"auth": { "type": "noauth" },
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "x-api-key", "value": "YOUR_API_KEY", "type": "default" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john@example.com\"\n}"
+						},
+						"description": "Example POST through gateway. Replace path and body with your route config."
+					}
+				}
+			]
+		}
+	]
+}

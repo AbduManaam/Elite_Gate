@@ -48,6 +48,10 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	if err := h.policyRepo.Create(c.Request.Context(), p); err != nil {
+		if errors.Is(err, storage.ErrPolicyNameConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "policy name already exists"})
+			return
+		}
 		h.logger.Error().Err(err).Str("name", req.Name).Msg("failed to create policy")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return

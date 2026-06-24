@@ -19,7 +19,10 @@ func NewUpstreamRepo(db *sql.DB, logger zerolog.Logger) *UpstreamRepo {
 	return &UpstreamRepo{BaseRepo{db: db, logger: logger}}
 }
 
-var ErrUpstreamNotFound = errors.New("upstream not found")
+var (
+	ErrUpstreamNotFound      = errors.New("upstream not found")
+	ErrUpstreamNameConflict  = errors.New("upstream name already exists")
+)
 
 func (r *UpstreamRepo) Create(ctx context.Context, u *model.Upstream) error {
 	return r.withTenantTx(ctx, func(tx *sql.Tx) error {
@@ -59,6 +62,9 @@ func (r *UpstreamRepo) Create(ctx context.Context, u *model.Upstream) error {
 		)
 
 		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrUpstreamNameConflict
+			}
 			return fmt.Errorf(
 				"create upstream '%s' for project %s: %w",
 				u.Name,
@@ -111,6 +117,52 @@ func (r *UpstreamRepo) GetByID(ctx context.Context, id string) (*model.Upstream,
 	}
 
 	return &u, nil
+}
+
+// ListAllEnabledGlobal returns all enabled upstreams across all projects for
+// gateway route loading. It bypasses tenant context and queries directly.
+func (r *UpstreamRepo) ListAllEnabledGlobal(ctx context.Context) ([]model.Upstream, error) {
+	const q = `
+		SELECT id, project_id, name, target_url, protocol,
+		       COALESCE(health_path, ''),
+		       lb_strategy::text,
+		       enabled, created_at, updated_at
+		FROM upstreams
+		WHERE enabled    = TRUE
+		  AND deleted_at IS NULL
+		ORDER BY name ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list all enabled upstreams: %w", err)
+	}
+	defer rows.Close()
+
+	var upstreams []model.Upstream
+	for rows.Next() {
+		var u model.Upstream
+		if err := rows.Scan(
+			&u.ID,
+			&u.ProjectID,
+			&u.Name,
+			&u.TargetURL,
+			&u.Protocol,
+			&u.HealthPath,
+			&u.LBStrategy,
+			&u.Enabled,
+			&u.CreatedAt,
+			&u.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan upstream row: %w", err)
+		}
+		upstreams = append(upstreams, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate upstream rows: %w", err)
+	}
+
+	return upstreams, nil
 }
 
 func (r *UpstreamRepo) ListAll(ctx context.Context) ([]model.Upstream, error) {
@@ -254,7 +306,7 @@ func (r *UpstreamRepo) Disable(ctx context.Context, id string) error {
 	return nil
 }
 
-// Delete performs a soft-delete
+// Delete performs a soft-delete and cleans up orphan references.
 func (r *UpstreamRepo) Delete(ctx context.Context, id string) error {
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
 		tc, err := TenantFromContext(ctx)
@@ -262,16 +314,14 @@ func (r *UpstreamRepo) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
+		res, err := tx.ExecContext(ctx, `
 			UPDATE upstreams
 			SET    deleted_at = NOW(),
 			       updated_at = NOW()
 			WHERE  id = $1
 			  AND  project_id = $2
 			  AND  deleted_at IS NULL
-		`
-
-		res, err := tx.ExecContext(ctx, q, id, tc.ProjectID)
+		`, id, tc.ProjectID)
 		if err != nil {
 			return err
 		}
@@ -283,6 +333,29 @@ func (r *UpstreamRepo) Delete(ctx context.Context, id string) error {
 		if n == 0 {
 			return ErrUpstreamNotFound
 		}
+
+		_, err = tx.ExecContext(ctx, `
+			UPDATE routes
+			SET    upstream_id = NULL,
+			       updated_at  = NOW()
+			WHERE  upstream_id = $1
+			  AND  project_id  = $2
+			  AND  deleted_at  IS NULL
+		`, id, tc.ProjectID)
+		if err != nil {
+			return fmt.Errorf("clear route upstream ref: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			UPDATE upstream_targets
+			SET    deleted_at = NOW()
+			WHERE  upstream_id = $1
+			  AND  deleted_at  IS NULL
+		`, id)
+		if err != nil {
+			return fmt.Errorf("soft-delete upstream targets: %w", err)
+		}
+
 		return nil
 	})
 

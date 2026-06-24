@@ -116,6 +116,12 @@ func (h *UpstreamHandler) Create(c *gin.Context) {
 
 	// Save to database
 	if err := h.repo.Create(c.Request.Context(), u); err != nil {
+		if errors.Is(err, storage.ErrUpstreamNameConflict) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "upstream name already exists",
+			})
+			return
+		}
 		h.logger.Error().
 			Err(err).
 			Str("name", u.Name).
