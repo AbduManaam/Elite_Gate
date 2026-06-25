@@ -108,13 +108,15 @@ func (l *Loader) syncHealthTargets(pools map[string]UpstreamPool) {
 	if l.health == nil {
 		return
 	}
-	urls := make([]string, 0, len(pools)*2)
+	// Build map[targetURL → healthPath] from all pools.
+	// Every target in a pool shares the upstream's health path.
+	targets := make(map[string]string, len(pools)*2)
 	for _, pool := range pools {
 		for _, t := range pool.Targets {
-			urls = append(urls, t.URL)
+			targets[t.URL] = pool.HealthPath
 		}
 	}
-	l.health.SyncTargets(urls)
+	l.health.SyncTargets(targets)
 }
 
 func (l *Loader) buildUpstreamPools(ctx context.Context) (map[string]UpstreamPool, error) {
@@ -155,8 +157,9 @@ func (l *Loader) buildUpstreamPools(ctx context.Context) (map[string]UpstreamPoo
 		}
 
 		pools[u.ID] = UpstreamPool{
-			Targets:  targets,
-			Strategy: strategy,
+			Targets:    targets,
+			Strategy:   strategy,
+			HealthPath: u.HealthPath,
 		}
 	}
 

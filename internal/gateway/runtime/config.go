@@ -20,8 +20,9 @@ type Snapshot struct {
 // ├── user-service-pod-1
 // └── user-service-pod-2
 type UpstreamPool struct {
-	Targets  []loadbalancer.Target
-	Strategy loadbalancer.Strategy
+	Targets    []loadbalancer.Target
+	Strategy   loadbalancer.Strategy
+	HealthPath string // health probe path for all targets in this pool (e.g. "/health")
 }
 
 // No pointer,Bcz the method only reads data and does not modify anything.

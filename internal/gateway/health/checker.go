@@ -20,27 +20,27 @@ type Status struct {
 
 // Runs concurrent health checks for upstream services and store their status.
 type Checker struct {
-	mu       sync.RWMutex
-	statuses map[string]*Status // key = upstream base URL
+	mu          sync.RWMutex
+	statuses    map[string]*Status  // key = upstream base URL
+	healthPaths map[string]string   // key = upstream base URL, value = health path (e.g. "/health")
 
 	client       *http.Client
 	interval     time.Duration
 	probeTimeout time.Duration
-	healthPath   string
 	logger       zerolog.Logger
 }
 
 // Creates a health checker. Call Start() to begin "periodic probes"(Repeatedly runs health checks at fixed intervals).
 //
 // interval: how often health checks run.
-// healthPath: endpoint used for health checks.
 // probeTimeout: maximum time allowed for each probe.
-func New(interval time.Duration, healthPath string, probeTimeout time.Duration, logger zerolog.Logger) *Checker {
+// Each upstream registers its own health path via Register().
+func New(interval time.Duration, probeTimeout time.Duration, logger zerolog.Logger) *Checker {
 	return &Checker{
 		statuses:     make(map[string]*Status),
+		healthPaths:  make(map[string]string),
 		interval:     interval,
 		probeTimeout: probeTimeout,
-		healthPath:   healthPath,
 		logger:       logger.With().Str("component", "health_checker").Logger(),
 		client: &http.Client{
 			Timeout: 0,
@@ -51,31 +51,41 @@ func New(interval time.Duration, healthPath string, probeTimeout time.Duration, 
 	}
 }
 
-// Adds an upstream URL to be health-checked.
-// Safe to call anytime; duplicate URLs are ignored.
-func (c *Checker) Register(baseURL string) {
+// Register adds an upstream URL to be health-checked with its specific health path.
+// If healthPath is empty, "/health" is used as a safe default.
+// Safe to call anytime; if the URL already exists the health path is updated.
+func (c *Checker) Register(baseURL, healthPath string) {
+	if healthPath == "" {
+		healthPath = "/health"
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.statuses[baseURL]; exists {
-		return
+	if _, exists := c.statuses[baseURL]; !exists {
+		c.statuses[baseURL] = &Status{Healthy: true}
+		c.logger.Info().
+			Str("upstream", baseURL).
+			Str("health_path", healthPath).
+			Msg("health: registered new upstream")
 	}
-	c.statuses[baseURL] = &Status{Healthy: true}
-	c.logger.Info().
-		Str("upstream", baseURL).
-		Msg("health: registered new upstream")
+	c.healthPaths[baseURL] = healthPath
 }
 
-func (c *Checker) RegisterAll(urls []string) {
-	for _, u := range urls {
-		c.Register(u)
+// RegisterAll registers multiple upstreams. The map key is the base URL,
+// the value is the health path for that upstream.
+func (c *Checker) RegisterAll(targets map[string]string) {
+	for url, path := range targets {
+		c.Register(url, path)
 	}
 }
 
-// if a server is removed from an upstream pool, this function automatically stops the Health Checking for that server
-func (c *Checker) SyncTargets(desired []string) {
+// SyncTargets reconciles the health checker's watch list with the desired set.
+// desired is a map of baseURL → healthPath.
+// URLs no longer in the desired set are unregistered.
+func (c *Checker) SyncTargets(desired map[string]string) {
 	want := make(map[string]struct{}, len(desired))
-	for _, u := range desired {
+	for u := range desired {
 		want[u] = struct{}{}
 	}
 
@@ -88,8 +98,8 @@ func (c *Checker) SyncTargets(desired []string) {
 	}
 	c.mu.RUnlock()
 
-	for _, u := range desired {
-		c.Register(u)
+	for url, path := range desired {
+		c.Register(url, path)
 	}
 	for _, u := range toRemove {
 		c.Unregister(u)
@@ -106,6 +116,7 @@ func (c *Checker) Unregister(baseURL string) {
 	}
 
 	delete(c.statuses, baseURL)
+	delete(c.healthPaths, baseURL)
 	c.logger.Info().
 		Str("upstream", baseURL).
 		Msg("health: unregistered upstream")
@@ -143,8 +154,7 @@ func (c *Checker) Start(ctx context.Context) {
 	c.logger.Info().
 		Dur("interval", c.interval).
 		Dur("probe_timeout", c.probeTimeout).
-		Str("health_path", c.healthPath).
-		Msg("health: checker starting")
+		Msg("health: checker starting (per-upstream health paths)")
 	go c.loop(ctx)
 }
 
@@ -196,8 +206,16 @@ func (c *Checker) probeAll(ctx context.Context) {
 }
 
 // Performs a single health check and returns its status.
+// Uses the per-upstream health path registered via Register().
 func (c *Checker) probe(ctx context.Context, baseURL string) (bool, string) {
-	target := baseURL + c.healthPath
+	c.mu.RLock()
+	healthPath, ok := c.healthPaths[baseURL]
+	c.mu.RUnlock()
+	if !ok || healthPath == "" {
+		healthPath = "/health"
+	}
+
+	target := baseURL + healthPath
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {

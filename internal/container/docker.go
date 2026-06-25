@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -256,7 +257,9 @@ func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerI
 	}
 
 	if runningInContainer() {
-		return containerIP, gatewayContainerPort.Port(), nil
+		// Use stable container name for Docker DNS resolution
+		containerName := strings.TrimPrefix(info.Name, "/")
+		return containerName, gatewayContainerPort.Port(), nil
 	}
 
 	return "localhost", hostPort, nil

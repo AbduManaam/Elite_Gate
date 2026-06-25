@@ -182,6 +182,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			}
 			gateways := projectGroup.Group("/gateways")
 			{
+				gateways.GET("", middleware.RBAC(middleware.RoleViewer), gatewayHandler.List)
 				gateways.POST("", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Provision)
 				gateways.DELETE("/:gatewayId", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Decommission)
 			}

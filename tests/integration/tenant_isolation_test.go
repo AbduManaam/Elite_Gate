@@ -152,4 +152,48 @@ func TestTenantIsolation(t *testing.T) {
 	if !found {
 		t.Errorf("Project A should see its own route, but it was not returned in ListAll")
 	}
+
+	// 7. Test Gateway Isolation
+	gatewayRepo := storage.NewGatewayRepo(testDB)
+
+	// Provision a gateway for Project A using superuser db connection to bypass RLS setup restriction.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO gateways (external_id, project_id, endpoint_ip, gateway_port, plan, status)
+		VALUES ('gw_test_alpha_rls', $1, '0.0.0.0', '0', 'shared', 'provisioning')
+	`, projectA)
+	if err != nil {
+		t.Fatalf("Failed to provision gateway: %v", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM gateways WHERE external_id = 'gw_test_alpha_rls'")
+	}()
+
+
+	// Query gateways using TenantContext B (should NOT return gw_test_alpha_rls)
+	gatewaysB, err := gatewayRepo.ListByProject(tenantCtxB, projectB.String())
+	if err != nil {
+		t.Fatalf("ListByProject with tenant ctx B failed: %v", err)
+	}
+	for _, gw := range gatewaysB {
+		if gw.ExternalID == "gw_test_alpha_rls" {
+			t.Errorf("Project B should not see Project A's gateway, but it was returned in ListByProject")
+		}
+	}
+
+	// Query gateways using TenantContext A (should return gw_test_alpha_rls)
+	gatewaysA, err := gatewayRepo.ListByProject(tenantCtxA, projectA.String())
+	if err != nil {
+		t.Fatalf("ListByProject with tenant ctx A failed: %v", err)
+	}
+	foundGw := false
+	for _, gw := range gatewaysA {
+		if gw.ExternalID == "gw_test_alpha_rls" {
+			foundGw = true
+			break
+		}
+	}
+	if !foundGw {
+		t.Errorf("Project A should see its own gateway, but it was not returned in ListByProject")
+	}
 }
+

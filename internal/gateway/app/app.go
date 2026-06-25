@@ -81,7 +81,6 @@ func StartApp(cfg *config.Config) (*App, error) {
 	// LB pool) for probing — not just the legacy single-target case.
 	hc := health.New(
 		10*time.Second, // probe every 10 seconds
-		"/health",      // health endpoint path on each upstream
 		3*time.Second,  // per-probe HTTP timeout
 		logger,
 	)

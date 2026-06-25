@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"elitegate/internal/container"
@@ -144,6 +145,14 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 		return
 	}
 
+	// Validate format: Must be the human-readable external_id
+	if !strings.HasPrefix(externalID, "gw_") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid gateway ID: please provide the external_id (e.g. 'gw_xxxx') instead of the database UUID",
+		})
+		return
+	}
+
 	h.logger.Info().Str("external_id", externalID).Msg("decommissioning gateway")
 
 	// Step 1 — stop and remove the container.
@@ -160,8 +169,15 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 	// Step 2 — soft-delete in the DB.
 	if err := h.repo.Decommission(c.Request.Context(), externalID); err != nil {
 		if errors.Is(err, storage.ErrGatewayNotFound) {
-			// Container is gone and DB row is already gone — that's a success.
-			c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+			// Check if it is actually in the DB but already decommissioned (soft-deleted).
+			status, statusErr := h.repo.GetGatewayStatus(c.Request.Context(), externalID)
+			if statusErr == nil && status == "decommissioned" {
+				c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+				return
+			}
+
+			// If it doesn't exist in the DB at all, return 404.
+			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 			return
 		}
 		h.logger.Error().Err(err).
@@ -170,7 +186,28 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	h.logger.Info().Str("external_id", externalID).Msg("gateway decommissioned successfully")
 	c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+}
+
+// List handles GET /admin/v1/projects/:projectId/gateways
+func (h *GatewayHandler) List(c *gin.Context) {
+	projectID := c.Param("projectId")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "projectId is required"})
+		return
+	}
+
+	h.logger.Info().Str("project_id", projectID).Msg("listing gateways for project")
+
+	gateways, err := h.repo.ListByProject(c.Request.Context(), projectID)
+	if err != nil {
+		h.logger.Error().Err(err).Str("project_id", projectID).Msg("failed to list gateways from database")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"gateways": gateways,
+	})
 }

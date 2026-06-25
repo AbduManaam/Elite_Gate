@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -384,6 +385,15 @@ func (h *PlatformHandler) ForceDecommission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gateway id is required"})
 		return
 	}
+
+	// Validate format: Must be the human-readable external_id
+	if !strings.HasPrefix(gatewayID, "gw_") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid gateway ID: please provide the external_id (e.g. 'gw_xxxx') instead of the database UUID",
+		})
+		return
+	}
+
 	adminID := actingAdminID(c)
 
 	if err := h.containerMgr.Decommission(c.Request.Context(), gatewayID); err != nil {
@@ -399,17 +409,23 @@ func (h *PlatformHandler) ForceDecommission(c *gin.Context) {
 
 	if err := h.gatewayRepo.Decommission(c.Request.Context(), gatewayID); err != nil {
 		if errors.Is(err, storage.ErrGatewayNotFound) {
-			// Container removal succeeded but DB row already gone — treat as success.
-			// Same convention the existing tenant-facing decommission handler uses.
-			h.logger.Info().
-				Str("gateway_id", gatewayID).
-				Str("acting_admin_id", adminID).
-				Msg("platform override: gateway force-decommissioned (DB row already absent)")
-			c.JSON(http.StatusOK, gin.H{
-				"gateway_id": gatewayID,
-				"status":     "decommissioned",
-				"message":    "container removed; gateway is now OFFLINE — use the Provision flow to re-create if needed",
-			})
+			// Check if it is actually in the DB but already decommissioned (soft-deleted).
+			status, statusErr := h.gatewayRepo.GetGatewayStatusPlatform(c.Request.Context(), gatewayID)
+			if statusErr == nil && status == "decommissioned" {
+				h.logger.Info().
+					Str("gateway_id", gatewayID).
+					Str("acting_admin_id", adminID).
+					Msg("platform override: gateway force-decommissioned (DB row already decommissioned)")
+				c.JSON(http.StatusOK, gin.H{
+					"gateway_id": gatewayID,
+					"status":     "decommissioned",
+					"message":    "container removed; gateway is now OFFLINE — use the Provision flow to re-create if needed",
+				})
+				return
+			}
+
+			// If it doesn't exist in the DB at all, return 404.
+			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 			return
 		}
 		h.logger.Error().Err(err).

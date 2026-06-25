@@ -159,6 +159,46 @@ func (r *GatewayRepo) Decommission(ctx context.Context, externalID string) error
 	return nil
 }
 
+// GetGatewayStatus returns the status of a gateway (even if soft-deleted/decommissioned).
+// If the gateway does not exist at all, it returns ErrGatewayNotFound.
+func (r *GatewayRepo) GetGatewayStatus(ctx context.Context, externalID string) (string, error) {
+	var status string
+	const q = `
+		SELECT status
+		FROM   gateways
+		WHERE  external_id = $1
+	`
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, q, externalID).Scan(&status)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrGatewayNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get gateway status: %w", err)
+	}
+	return status, nil
+}
+
+// GetGatewayStatusPlatform retrieves the status of any gateway globally (no RLS/tenant check).
+func (r *GatewayRepo) GetGatewayStatusPlatform(ctx context.Context, externalID string) (string, error) {
+	var status string
+	const q = `
+		SELECT status
+		FROM   gateways
+		WHERE  external_id = $1
+	`
+	err := r.db.QueryRowContext(ctx, q, externalID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrGatewayNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get gateway status platform: %w", err)
+	}
+	return status, nil
+}
+
+
 // ListActive returns all non-deleted gateways in the "active" state.
 // This is a global query used by the platform control plane, not scoped to a tenant.
 func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
@@ -253,3 +293,49 @@ func (r *GatewayRepo) GetByExternalID(ctx context.Context, externalID string) (*
 
 	return &g, nil
 }
+
+// ListByProject returns all gateways for the current tenant's project.
+func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string) ([]GatewayRecord, error) {
+	r.logger.Debug().Str("project_id", projectID).Msg("ListByProject: listing gateways for project")
+
+	var gateways []GatewayRecord
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		const q = `
+			SELECT id, project_id::text, external_id, endpoint_ip, gateway_port, plan, status
+			FROM   gateways
+			WHERE  project_id = $1
+			  AND  deleted_at IS NULL
+			ORDER BY created_at ASC
+		`
+		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
+		if err != nil {
+			return fmt.Errorf("query gateways: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var g GatewayRecord
+			if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status); err != nil {
+				return fmt.Errorf("scan gateway row: %w", err)
+			}
+			gateways = append(gateways, g)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list gateways: %w", err)
+	}
+
+	if gateways == nil {
+		gateways = []GatewayRecord{}
+	}
+
+	return gateways, nil
+}
+
