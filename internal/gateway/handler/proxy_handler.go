@@ -90,6 +90,9 @@ func (d *DynamicProxy) resolveTarget(rt *model.Route) (loadbalancer.Target, load
 			if err != nil {
 				return loadbalancer.Target{}, nil, err
 			}
+			d.logger.Info().
+				Str("picked", t.URL).
+				Msg("LB selected target")
 			return t, pool.Strategy, nil
 		}
 	}

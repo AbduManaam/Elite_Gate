@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
@@ -53,7 +54,7 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 
 	p := &model.Project{
 		Name:        req.Name,
-		Slug:        req.Slug,
+		Slug:        strings.ToLower(req.Slug),
 		Description: req.Description,
 		OwnerID:     userID,
 		Plan:        plan,

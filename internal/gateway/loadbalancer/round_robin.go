@@ -13,9 +13,7 @@ func NewRoundRobin() *RoundRobin {
 	return &RoundRobin{}
 }
 
-func (r *RoundRobin) Name() string {
-	return "round-robin"
-}
+func (r *RoundRobin) Name() string { return "round_robin" }
 
 func (r *RoundRobin) Pick(pool []Target) (Target, error) {
 	if len(pool) == 0 {
