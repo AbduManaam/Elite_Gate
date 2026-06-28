@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"elitegate/internal/shared"
 )
 
 // ReverseProxy wraps httputil.ReverseProxy with production config
@@ -48,6 +50,20 @@ func New(targetURL string, hostMap map[string]string) (*ReverseProxy, error) {
 		} else if req.URL.Path == "/api" {
 			req.URL.Path = "/"
 		}
+
+		// Forward authenticated identity as trusted headers so upstreams
+		// can use them directly without re-validating credentials.
+		if clientID, ok := req.Context().Value(shared.ContextKeyClientID).(string); ok && clientID != "" {
+			req.Header.Set("X-Client-ID", clientID)
+		}
+		if role, ok := req.Context().Value(shared.ContextKeyRole).(string); ok && role != "" {
+			req.Header.Set("X-Client-Role", role)
+		}
+
+		// Strip raw credentials — upstreams must never see them.
+		// Identity is already forwarded via X-Client-ID / X-Client-Role above.
+		req.Header.Del("X-API-Key")
+		req.Header.Del("Authorization")
 	}
 
 	// Custom error handler — prevents panic on upstream failure

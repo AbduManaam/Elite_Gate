@@ -17,11 +17,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// PlatformHandler serves cross-tenant, platform-operator-only endpoints
-// under /admin/v1/platform/*. Every route using this handler MUST be
-// gated by SuperAdminOnly middleware at the router level — this handler
-// performs no per-request authorization check of its own, by design,
-// to keep the authorization decision in exactly one place.
+// PlatformHandler serves platform-level admin endpoints.
+// Authorization is enforced by middleware, not the handler.
 type PlatformHandler struct {
 	projectRepo  *storage.ProjectRepo
 	gatewayRepo  *storage.GatewayRepo
@@ -91,11 +88,8 @@ func (h *PlatformHandler) ListTenants(c *gin.Context) {
 // Item 2 — Delete Any Tenant (Platform Override)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// DeleteTenant handles DELETE /admin/v1/platform/projects/:projectId
-//
-// Operator override — bypasses the normal requirement that only a project's
-// own owner can delete it. Reuses ProjectRepo.Delete unchanged (already
-// cascades correctly to api_keys, routes, and upstreams in one transaction).
+// DeleteTenant deletes a project using operator privileges and
+// reuses the existing cascading project deletion logic.
 func (h *PlatformHandler) DeleteTenant(c *gin.Context) {
 	projectID := c.Param("projectId")
 	if projectID == "" {
@@ -139,12 +133,8 @@ type gatewayHealthResult struct {
 	Status    string `json:"status"` // "healthy" | "unreachable"
 }
 
-// PlatformHealth handles GET /admin/v1/platform/health
-//
-// Aggregates project activation counts and gateway status counts directly
-// from Postgres, then fans out a lightweight HTTP health check to every
-// active gateway's /health endpoint. A 2s per-gateway timeout prevents
-// one slow/dead gateway from blocking the whole response.
+// PlatformHealth returns overall platform health, including project,
+// gateway, and active gateway health-check status.
 func (h *PlatformHandler) PlatformHealth(c *gin.Context) {
 	ctx := c.Request.Context()
 	adminID := actingAdminID(c)
@@ -190,9 +180,7 @@ func (h *PlatformHandler) PlatformHealth(c *gin.Context) {
 	})
 }
 
-// probeGateways concurrently checks each gateway's /health endpoint.
-// Failures are reported as "unreachable" — one dead gateway never
-// fails the entire platform health view.
+// probeGateways checks gateway health concurrently and marks failures as unreachable.
 func (h *PlatformHandler) probeGateways(ctx context.Context, gateways []storage.GatewayRecord) []gatewayHealthResult {
 	results := make([]gatewayHealthResult, len(gateways))
 	var wg sync.WaitGroup
@@ -242,10 +230,7 @@ func (h *PlatformHandler) probeGateways(ctx context.Context, gateways []storage.
 // Item 4 — Platform-Wide Metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
-// PlatformMetrics handles GET /admin/v1/platform/metrics
-//
-// Pure COUNT(*) aggregation over existing tables — no new metrics
-// collection. Each count is a cheap indexed query.
+// PlatformMetrics returns aggregated counts for platform resources.
 func (h *PlatformHandler) PlatformMetrics(c *gin.Context) {
 	ctx := c.Request.Context()
 	adminID := actingAdminID(c)
@@ -321,12 +306,8 @@ func (h *PlatformHandler) ReactivateTenant(c *gin.Context) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Item 6 — Restart a Specific Gateway
-// ─────────────────────────────────────────────────────────────────────────────
 
-// RestartGateway handles POST /admin/v1/platform/gateways/:gatewayId/restart
-//
-// Looks up a single gateway by its external ID and triggers a config
-// reload using the same logic SyncHandler.Reload uses in bulk.
+// RestartGateway reloads configuration for a specific gateway by ID.
 func (h *PlatformHandler) RestartGateway(c *gin.Context) {
 	gatewayID := c.Param("gatewayId")
 	if gatewayID == "" {
@@ -369,16 +350,8 @@ func (h *PlatformHandler) RestartGateway(c *gin.Context) {
 // Item 7 — Force-Decommission an Unresponsive Gateway
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ForceDecommission handles
-// POST /admin/v1/platform/gateways/:gatewayId/force-decommission
-//
-// Operator override — stops and removes the container and marks it
-// decommissioned in the DB, bypassing ProjectScope/RBAC entirely.
-// Used when a gateway is stuck and the normal tenant-facing path isn't available.
-//
-// Does NOT auto-recreate the container. A misbehaving container that needed
-// force-removal could loop the same failure if auto-recreated.
-// Re-provisioning is left as an explicit operator decision via the Provision flow.
+// ForceDecommission removes a stuck gateway container and marks it
+// decommissioned. Re-provisioning must be done manually.
 func (h *PlatformHandler) ForceDecommission(c *gin.Context) {
 	gatewayID := c.Param("gatewayId")
 	if gatewayID == "" {
