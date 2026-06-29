@@ -10,6 +10,8 @@ import (
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/ratelimit"
+	"elitegate/internal/gateway/metrics"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -54,9 +56,12 @@ func NewRouter(
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 
+	mux.Handle("/metrics", promhttp.Handler())
+
 	apiHandler := middleware.Chain(
 		dynamic,
 		middleware.RouteMatcher(loader),
+		metrics.Middleware,
 		middleware.CORS,
 		middleware.IPFilter,
 		authMiddleware.Middleware,
