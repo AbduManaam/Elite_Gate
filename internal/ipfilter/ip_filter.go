@@ -75,3 +75,7 @@ func (c *IPChecker) IsAllowed(ipStr string) bool {
 	}
 	return false
 }
+
+func (c *IPChecker) IsBlocked(ipStr string) bool {
+	return c.IsAllowed(ipStr)
+}
