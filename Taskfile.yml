@@ -44,7 +44,7 @@ tasks:
   run-gateway:
     desc: Run gateway locally against localhost databases
     env:
-      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      POSTGRES_DSN: postgres://coreguard_app:coreguard_app_pass@localhost:5433/elitegate_db?sslmode=disable
       REDIS_ADDR: localhost:6379
       REDIS_PASSWORD: redis_secret
       JWT_SECRET: supersecretjwtkey_32byteslongkey!
@@ -58,7 +58,7 @@ tasks:
   run-admin:
     desc: Run admin locally against localhost databases
     env:
-      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      POSTGRES_DSN: postgres://coreguard_app:coreguard_app_pass@localhost:5433/elitegate_db?sslmode=disable
       REDIS_ADDR: localhost:6379
       REDIS_PASSWORD: redis_secret
       JWT_SECRET: supersecretjwtkey_32byteslongkey!
@@ -162,7 +162,7 @@ tasks:
   token:
     desc: Generate a client JWT token
     env:
-      POSTGRES_DSN: postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable
+      POSTGRES_DSN: postgres://coreguard_app:coreguard_app_pass@localhost:5433/elitegate_db?sslmode=disable
       REDIS_ADDR: localhost:6379
       REDIS_PASSWORD: redis_secret
       JWT_SECRET: supersecretjwtkey_32byteslongkey!

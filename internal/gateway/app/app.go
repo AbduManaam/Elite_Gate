@@ -76,9 +76,6 @@ func StartApp(cfg *config.Config) (*App, error) {
 	}
 
 	// ── Health Checker ────────────────────────────────────────────────────
-	// Created before loader.Start() and wired into the loader so the very
-	// first reload registers every backend target (from every upstream's
-	// LB pool) for probing — not just the legacy single-target case.
 	hc := health.New(
 		10*time.Second, // probe every 10 seconds
 		3*time.Second,  // per-probe HTTP timeout

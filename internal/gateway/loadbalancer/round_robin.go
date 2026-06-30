@@ -2,9 +2,6 @@ package loadbalancer
 
 import "sync/atomic"
 
-//global selection counter used to decide which server gets the next request.
-//The counter only keeps track of how many picks have happened, not how many
-//  requests are currently running on each server.
 type RoundRobin struct {
 	counter atomic.Uint64
 }
@@ -22,16 +19,7 @@ func (r *RoundRobin) Pick(pool []Target) (Target, error) {
 	if len(pool) == 1 {
 		return pool[0], nil
 	}
-	// Selects the next target using a round-robin index over the weighted target list.
 	expanded := expandByWeight(pool)
-
-	// idx := counter.Add(1) % 4 [4 = total list of Target]
-	//expanded[3]
-	// Return =
-	/*Target{
-	ID: "B",
-	URL: "http://server-b",
-	}*/
 	idx := r.counter.Add(1) % uint64(len(expanded))
 	return expanded[idx], nil
 }
