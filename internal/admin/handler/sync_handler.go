@@ -121,6 +121,83 @@ func (h *SyncHandler) Reload(c *gin.Context) {
 	})
 }
 
+// ReloadProject targets and reloads only the active gateways belonging to the specific project.
+func (h *SyncHandler) ReloadProject(c *gin.Context) {
+	tcVal, exists := c.Get("tenant_ctx")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "tenant context missing"})
+		return
+	}
+	tc := tcVal.(storage.TenantContext)
+
+	gateways, err := h.gatewayRepo.ListByProject(c.Request.Context(), tc.ProjectID.String())
+	if err != nil {
+		h.logger.Error().Err(err).Str("project_id", tc.ProjectID.String()).Msg("failed to list gateways for project")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve project gateways"})
+		return
+	}
+
+	var activeGateways []storage.GatewayRecord
+	for _, gw := range gateways {
+		if gw.Status == "active" {
+			activeGateways = append(activeGateways, gw)
+		}
+	}
+
+	if len(activeGateways) == 0 {
+		h.logger.Info().Str("project_id", tc.ProjectID.String()).Msg("no active gateways found for project; reload is a no-op")
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "success",
+			"message": "no active gateways to reload for this project",
+		})
+		return
+	}
+
+	h.logger.Info().Str("project_id", tc.ProjectID.String()).Int("gateway_count", len(activeGateways)).Msg("fanning out reload to project active gateways")
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []string
+	)
+
+	for _, gw := range activeGateways {
+		wg.Add(1)
+		go func(g storage.GatewayRecord) {
+			defer wg.Done()
+			if err := h.reloadOne(c.Request.Context(), g); err != nil {
+				mu.Lock()
+				errs = append(errs, err.Error())
+				mu.Unlock()
+			}
+		}(gw)
+	}
+
+	wg.Wait()
+
+	if len(errs) > 0 {
+		h.logger.Warn().
+			Strs("errors", errs).
+			Int("failed", len(errs)).
+			Int("total", len(activeGateways)).
+			Str("project_id", tc.ProjectID.String()).
+			Msg("partial reload: some project gateways failed")
+
+		c.JSON(http.StatusMultiStatus, gin.H{
+			"status":  "partial_success",
+			"errors":  errs,
+			"message": "reload triggered, but some project nodes failed to sync",
+		})
+		return
+	}
+
+	h.logger.Info().Str("project_id", tc.ProjectID.String()).Int("gateway_count", len(activeGateways)).Msg("all project gateways reloaded successfully")
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "all project gateway caches reloaded successfully",
+	})
+}
+
 // reloadURL builds the reload endpoint URL for a gateway.
 // 0.0.0.0 is treated as localhost (Docker / local dev convenience).
 func reloadURL(g storage.GatewayRecord) string {

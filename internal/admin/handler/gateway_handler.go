@@ -211,3 +211,27 @@ func (h *GatewayHandler) List(c *gin.Context) {
 		"gateways": gateways,
 	})
 }
+
+// ListAllForAdmin handles GET /admin/v1/gateways
+// Returns all active gateways across all projects where the authenticated admin has membership.
+func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
+	adminUserIDVal, exists := c.Get("admin_user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	adminUserID := adminUserIDVal.(string)
+
+	gateways, err := h.repo.ListAllForAdmin(c.Request.Context(), adminUserID)
+	if err != nil {
+		h.logger.Error().
+			Err(err).
+			Str("admin_user_id", adminUserID).
+			Msg("failed to list gateways for admin")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	// TODO: Add pagination support if gateway count grows significantly.
+	c.JSON(http.StatusOK, gin.H{"gateways": gateways})
+}

@@ -339,3 +339,47 @@ func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string) ([]Ga
 	return gateways, nil
 }
 
+// ListAllForAdmin returns all non-deleted, active gateways belonging to projects
+// where the specified admin user is a member.
+// This method bypasses session-scoped RLS by executing directly on r.db, and enforces
+// security by explicitly joining with the project_members table on the admin's user ID.
+func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string) ([]GatewayRecord, error) {
+	r.logger.Debug().Str("admin_user_id", adminUserID).Msg("ListAllForAdmin: querying gateways for admin")
+
+	const q = `
+		SELECT g.id, g.project_id::text, g.external_id, g.endpoint_ip, g.gateway_port, g.plan, g.status
+		FROM   gateways g
+		JOIN   project_members pm ON g.project_id = pm.project_id
+		JOIN   projects p ON g.project_id = p.id
+		WHERE  pm.admin_user_id = $1
+		  AND  g.status         = 'active'
+		  AND  g.deleted_at     IS NULL
+		  AND  p.deleted_at     IS NULL
+		ORDER BY g.created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, q, adminUserID)
+	if err != nil {
+		return nil, fmt.Errorf("ListAllForAdmin query: %w", err)
+	}
+	defer rows.Close()
+
+	var gateways []GatewayRecord
+	for rows.Next() {
+		var g GatewayRecord
+		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status); err != nil {
+			return nil, fmt.Errorf("scan gateway row: %w", err)
+		}
+		gateways = append(gateways, g)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate gateway rows: %w", err)
+	}
+
+	if gateways == nil {
+		gateways = []GatewayRecord{}
+	}
+
+	return gateways, nil
+}
+

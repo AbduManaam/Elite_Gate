@@ -108,7 +108,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		v1.GET("/projects", projectHandler.List)
 		v1.PUT("/projects/:projectId", projectHandler.Update)
 		v1.DELETE("/projects/:projectId", projectHandler.Delete)
-		v1.POST("/reload", syncHandler.Reload)
+		v1.POST("/reload", middleware.SuperAdminOnly(authRepo, logger), syncHandler.Reload)
+		v1.GET("/gateways", gatewayHandler.ListAllForAdmin)
 
 		// ── Platform-operator-only routes ───────────────────────────────────
 		// Cross-tenant. SuperAdminOnly gates every route in this group —
@@ -186,6 +187,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				gateways.POST("", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Provision)
 				gateways.DELETE("/:gatewayId", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Decommission)
 			}
+			projectGroup.POST("/reload", middleware.RBAC(middleware.RoleEditor), syncHandler.ReloadProject)
 		}
 
 		admins := v1.Group("/admins")

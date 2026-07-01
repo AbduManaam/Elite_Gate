@@ -190,7 +190,7 @@ func main() {
 	fmt.Printf("✅ API Key created successfully! ID: %s, Raw Key: %s\n", apiKeyID, apiKey)
 
 	fmt.Printf("\n--- Step 6: Deploy/Reload Configuration ---\n")
-	reloadRes, err := postRequest(adminURL+"/admin/v1/reload", nil, accessToken)
+	reloadRes, err := postRequest(fmt.Sprintf("%s/admin/v1/projects/%s/reload", adminURL, projectID), nil, accessToken)
 	if err != nil {
 		fmt.Printf("❌ Reload trigger failed: %v\n", err)
 		return

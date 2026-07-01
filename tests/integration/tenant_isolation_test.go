@@ -197,3 +197,111 @@ func TestTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestGatewayListAllForAdmin(t *testing.T) {
+	// Connect to development DB as superuser
+	dsn := "postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable"
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// 1. Create two test admin users
+	userA := uuid.New()
+	userB := uuid.New()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO admin_users (id, username, password_hash, email) VALUES
+		($1, 'test_user_a_all', 'hash', 'test_user_a_all@elitegate.local'),
+		($2, 'test_user_b_all', 'hash', 'test_user_b_all@elitegate.local')
+	`, userA, userB)
+	if err != nil {
+		t.Fatalf("Failed to insert admin users: %v", err)
+	}
+	defer func() {
+		db.ExecContext(ctx, "DELETE FROM admin_users WHERE id IN ($1, $2)", userA, userB)
+	}()
+
+	// 2. Create two test projects
+	projectA := uuid.New()
+	projectB := uuid.New()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO projects (id, name, slug, owner_id) VALUES
+		($1, 'Project Alpha All', 'test-alpha-all', $3),
+		($2, 'Project Beta All', 'test-beta-all', $4)
+	`, projectA, projectB, userA, userB)
+	if err != nil {
+		t.Fatalf("Failed to insert projects: %v", err)
+	}
+	defer func() {
+		db.ExecContext(ctx, "DELETE FROM projects WHERE id IN ($1, $2)", projectA, projectB)
+	}()
+
+	// 3. Create memberships
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO project_members (project_id, admin_user_id, role) VALUES
+		($1, $2, 'owner'),
+		($3, $4, 'owner')
+	`, projectA, userA, projectB, userB)
+	if err != nil {
+		t.Fatalf("Failed to insert memberships: %v", err)
+	}
+	defer func() {
+		db.ExecContext(ctx, "DELETE FROM project_members WHERE project_id IN ($1, $2)", projectA, projectB)
+	}()
+
+	// 4. Create gateways for Project A and Project B (active status)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO gateways (external_id, project_id, endpoint_ip, gateway_port, plan, status) VALUES
+		('gw_test_alpha_all', $1, '127.0.0.1', '8080', 'dedicated', 'active'),
+		('gw_test_beta_all', $2, '127.0.0.1', '8080', 'dedicated', 'active')
+	`, projectA, projectB)
+	if err != nil {
+		t.Fatalf("Failed to insert gateways: %v", err)
+	}
+	defer func() {
+		db.ExecContext(ctx, "DELETE FROM gateways WHERE external_id IN ('gw_test_alpha_all', 'gw_test_beta_all')")
+	}()
+
+	gatewayRepo := storage.NewGatewayRepo(db)
+
+	// Query gateways for Admin A (should return gw_test_alpha_all, NOT gw_test_beta_all)
+	gatewaysA, err := gatewayRepo.ListAllForAdmin(ctx, userA.String())
+	if err != nil {
+		t.Fatalf("ListAllForAdmin for user A failed: %v", err)
+	}
+
+	foundA := false
+	for _, gw := range gatewaysA {
+		if gw.ExternalID == "gw_test_beta_all" {
+			t.Errorf("Admin A should not see Admin B's gateway 'gw_test_beta_all'")
+		}
+		if gw.ExternalID == "gw_test_alpha_all" {
+			foundA = true
+		}
+	}
+	if !foundA {
+		t.Errorf("Admin A should see their own gateway 'gw_test_alpha_all'")
+	}
+
+	// Query gateways for Admin B (should return gw_test_beta_all, NOT gw_test_alpha_all)
+	gatewaysB, err := gatewayRepo.ListAllForAdmin(ctx, userB.String())
+	if err != nil {
+		t.Fatalf("ListAllForAdmin for user B failed: %v", err)
+	}
+
+	foundB := false
+	for _, gw := range gatewaysB {
+		if gw.ExternalID == "gw_test_alpha_all" {
+			t.Errorf("Admin B should not see Admin A's gateway 'gw_test_alpha_all'")
+		}
+		if gw.ExternalID == "gw_test_beta_all" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Errorf("Admin B should see their own gateway 'gw_test_beta_all'")
+	}
+}
+
