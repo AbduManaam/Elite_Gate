@@ -12,6 +12,7 @@ import (
 	"elitegate/helper"
 	"elitegate/internal/auth"
 
+	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -29,6 +30,8 @@ type ApiKeyRecord struct {
 	Name      string     `json:"name"`
 	KeyHash   string     `json:"-"`
 	Status    string     `json:"status"`
+	Roles     []string   `json:"roles"`
+	Scopes    []string   `json:"scopes"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -81,6 +84,8 @@ func (r *ApiKeyRepo) Create(
 	name string,
 	rawKey string,
 	expiresAt *time.Time,
+	roles []string,
+	scopes []string,
 ) (*ApiKeyRecord, error) {
 	r.logger.Info().
 		Str("name", name).
@@ -93,6 +98,8 @@ func (r *ApiKeyRepo) Create(
 		KeyHash:   keyHash,
 		Status:    "active",
 		ExpiresAt: expiresAt,
+		Roles:     helper.OrEmpty(roles),
+		Scopes:    helper.OrEmpty(scopes),
 	}
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
@@ -104,11 +111,11 @@ func (r *ApiKeyRepo) Create(
 		rec.ProjectID = tc.ProjectID.String()
 
 		const q = `
-			INSERT INTO api_keys (project_id, name, key_hash, expires_at)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO api_keys (project_id, name, key_hash, expires_at, roles, scopes)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id, status, created_at, updated_at
 		`
-		return tx.QueryRowContext(ctx, q, tc.ProjectID, name, keyHash, expiresAt).
+		return tx.QueryRowContext(ctx, q, tc.ProjectID, name, keyHash, expiresAt, pq.Array(helper.OrEmpty(roles)), pq.Array(helper.OrEmpty(scopes))).
 			Scan(&rec.ID, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt)
 	})
 	if err != nil {
@@ -266,15 +273,16 @@ func (r *ApiKeyRepo) GetByID(ctx context.Context, keyID string) (*ApiKeyRecord, 
 
 		const q = `
 			SELECT id, project_id::text, name, key_hash, status,
-			       expires_at, created_at, updated_at
+			       roles, scopes, expires_at, created_at, updated_at
 			FROM   api_keys
 			WHERE  id         = $1
 			  AND  project_id = $2
 			  AND  deleted_at IS NULL
 		`
 		return tx.QueryRowContext(ctx, q, keyID, tc.ProjectID).Scan(
-			&rec.ID, &rec.ProjectID, &rec.Name, &rec.KeyHash,
-			&rec.Status, &rec.ExpiresAt, &rec.CreatedAt, &rec.UpdatedAt,
+			&rec.ID, &rec.ProjectID, &rec.Name, &rec.KeyHash, &rec.Status,
+			pq.Array(&rec.Roles), pq.Array(&rec.Scopes),
+			&rec.ExpiresAt, &rec.CreatedAt, &rec.UpdatedAt,
 		)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -307,7 +315,7 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 
 		const q = `
 			SELECT id, project_id::text, name, key_hash, status,
-			       expires_at, created_at, updated_at
+			       roles, scopes, expires_at, created_at, updated_at
 			FROM   api_keys
 			WHERE  project_id = $1
 			  AND  deleted_at IS NULL
@@ -322,8 +330,9 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 		for rows.Next() {
 			var rec ApiKeyRecord
 			if err := rows.Scan(
-				&rec.ID, &rec.ProjectID, &rec.Name, &rec.KeyHash,
-				&rec.Status, &rec.ExpiresAt, &rec.CreatedAt, &rec.UpdatedAt,
+				&rec.ID, &rec.ProjectID, &rec.Name, &rec.KeyHash, &rec.Status,
+				pq.Array(&rec.Roles), pq.Array(&rec.Scopes),
+				&rec.ExpiresAt, &rec.CreatedAt, &rec.UpdatedAt,
 			); err != nil {
 				return fmt.Errorf("scan api_key row: %w", err)
 			}
@@ -357,7 +366,7 @@ func (r *ApiKeyRepo) FindByHash(
 		Msg("FindByHash: global api_key lookup")
 
 	const q = `
-		SELECT project_id::text, status, expires_at, deleted_at
+		SELECT project_id::text, status, roles, scopes, expires_at, deleted_at
 		FROM   api_keys
 		WHERE  key_hash = $1
 	`
@@ -365,12 +374,14 @@ func (r *ApiKeyRepo) FindByHash(
 	var (
 		projectID string
 		status    string
+		roles     []string
+		scopes    []string
 		expiresAt sql.NullTime
 		deletedAt sql.NullTime
 	)
 
 	err := r.db.QueryRowContext(ctx, q, hash).
-		Scan(&projectID, &status, &expiresAt, &deletedAt)
+		Scan(&projectID, &status, pq.Array(&roles), pq.Array(&scopes), &expiresAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		r.logger.Debug().
 			Str("hash_prefix", helper.SafePrefix(hash, 8)).
@@ -394,7 +405,7 @@ func (r *ApiKeyRepo) FindByHash(
 	// but log a warning to aid debugging.
 	if expiresAt.Valid && time.Now().After(expiresAt.Time) {
 		r.logger.Warn().
-			Str("hash_prefix", safePrefix(hash, 8)).
+			Str("hash_prefix", helper.SafePrefix(hash, 8)).
 			Str("project_id", projectID).
 			Time("expired_at", expiresAt.Time).
 			Msg("FindByHash: api_key is expired")
@@ -411,6 +422,8 @@ func (r *ApiKeyRepo) FindByHash(
 	return &auth.APIKeyRecord{
 		ClientID:  projectID, // project UUID is the client identity on the gateway
 		RevokedAt: revokedAt,
+		Roles:     roles,
+		Scopes:    scopes,
 	}, nil
 }
 

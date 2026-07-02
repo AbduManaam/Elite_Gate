@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -15,6 +16,8 @@ const cacheTTL = 10 * time.Minute
 type APIKeyRecord struct {
 	ClientID  string
 	RevokedAt *time.Time
+	Roles     []string
+	Scopes    []string
 }
 
 type KeyRepository interface {
@@ -31,37 +34,42 @@ func NewRedisKeyStore(rdb *redis.Client, db KeyRepository) *RedisKeyStore {
 }
 
 // Validate checks Redis first, falls back to PostgreSQL on miss.
-func (s *RedisKeyStore) Validate(key string) (string, bool) {
+func (s *RedisKeyStore) Validate(key string) (*APIKeyRecord, bool) {
 	ctx := context.Background()
 	keyHash := hashKey(key)
 	cacheKey := keyPrefix + keyHash
 
 	//Checking if API key is available in Redis cache
 	if s.redis != nil {
-		clientID, err := s.redis.Get(ctx, cacheKey).Result()
+		data, err := s.redis.Get(ctx, cacheKey).Result()
 		if err == nil {
-			return clientID, true
+			var rec APIKeyRecord
+			if json.Unmarshal([]byte(data), &rec) == nil {
+				return &rec, true
+			}
 		}
 	}
 
 	if s.db == nil {
-		return "", false
+		return nil, false
 	}
 
 	// Fallback to here, when Redis cache is not available, to check api key availability in postgresql database
 	record, err := s.db.FindByHash(ctx, keyHash)
 	if err != nil || record == nil {
-		return "", false
+		return nil, false
 	}
 
 	if record.RevokedAt != nil {
-		return "", false
+		return nil, false
 	}
 
 	if s.redis != nil {
-		s.redis.Set(ctx, cacheKey, record.ClientID, cacheTTL)
+		if data, err := json.Marshal(record); err == nil {
+			s.redis.Set(ctx, cacheKey, data, cacheTTL)
+		}
 	}
-	return record.ClientID, true
+	return record, true
 }
 
 func hashKey(key string) string {

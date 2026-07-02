@@ -26,6 +26,8 @@ type policyRequest struct {
 	AuthRequired   bool     `json:"auth_required"`
 	RateLimitRPM   int      `json:"rate_limit_rpm"`
 	AllowedOrigins []string `json:"allowed_origins"`
+	AllowedRoles   []string `json:"allowed_roles"`
+	AllowedScopes  []string `json:"allowed_scopes"`
 }
 
 func (h *PolicyHandler) Create(c *gin.Context) {
@@ -45,6 +47,8 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		AuthRequired:   req.AuthRequired,
 		RateLimitRPM:   req.RateLimitRPM,
 		AllowedOrigins: req.AllowedOrigins,
+		AllowedRoles:   req.AllowedRoles,
+		AllowedScopes:  req.AllowedScopes,
 	}
 
 	if err := h.policyRepo.Create(c.Request.Context(), p); err != nil {
@@ -113,6 +117,8 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		AuthRequired:   req.AuthRequired,
 		RateLimitRPM:   req.RateLimitRPM,
 		AllowedOrigins: req.AllowedOrigins,
+		AllowedRoles:   req.AllowedRoles,
+		AllowedScopes:  req.AllowedScopes,
 	}
 
 	tc, err := storage.TenantFromContext(c.Request.Context())

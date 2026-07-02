@@ -59,6 +59,9 @@ func New(targetURL string, hostMap map[string]string) (*ReverseProxy, error) {
 		if role, ok := req.Context().Value(shared.ContextKeyRole).(string); ok && role != "" {
 			req.Header.Set("X-Client-Role", role)
 		}
+		if scopes, ok := req.Context().Value(shared.ContextKeyScopes).([]string); ok && len(scopes) > 0 {
+			req.Header.Set("X-Client-Scopes", strings.Join(scopes, ","))
+		}
 
 		// Strip raw credentials — upstreams must never see them.
 		// Identity is already forwarded via X-Client-ID / X-Client-Role above.

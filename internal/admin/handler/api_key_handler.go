@@ -28,6 +28,8 @@ func NewApiKeyHandler(repo *storage.ApiKeyRepo, logger zerolog.Logger) *ApiKeyHa
 type createApiKeyRequest struct {
 	Name      string     `json:"name" binding:"required"`
 	ExpiresAt *time.Time `json:"expires_at"`
+	Roles     []string   `json:"roles"`
+	Scopes    []string   `json:"scopes"`
 }
 
 func (h *ApiKeyHandler) Create(c *gin.Context) {
@@ -46,7 +48,7 @@ func (h *ApiKeyHandler) Create(c *gin.Context) {
 
 	h.logger.Info().Str("name", req.Name).Msg("creating API key in database")
 
-	record, err := h.repo.Create(c.Request.Context(), req.Name, rawKey, req.ExpiresAt)
+	record, err := h.repo.Create(c.Request.Context(), req.Name, rawKey, req.ExpiresAt, req.Roles, req.Scopes)
 	if err != nil {
 		h.logger.Error().Err(err).Str("name", req.Name).Msg("failed to save API key in database")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -61,6 +63,8 @@ func (h *ApiKeyHandler) Create(c *gin.Context) {
 		"project_id": record.ProjectID,
 		"name":       record.Name,
 		"status":     record.Status,
+		"roles":      record.Roles,
+		"scopes":     record.Scopes,
 		"expires_at": record.ExpiresAt,
 		"created_at": record.CreatedAt,
 		"updated_at": record.UpdatedAt,
@@ -103,6 +107,8 @@ func (h *ApiKeyHandler) Rotate(c *gin.Context) {
 		"project_id": record.ProjectID,
 		"name":       record.Name,
 		"status":     record.Status,
+		"roles":      record.Roles,
+		"scopes":     record.Scopes,
 		"expires_at": record.ExpiresAt,
 		"created_at": record.CreatedAt,
 		"updated_at": record.UpdatedAt,

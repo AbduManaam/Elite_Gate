@@ -8,4 +8,5 @@ const (
 	ContextKeyRequestID ContextKey = "requestID"
 	ContextKeyRoute     ContextKey = "route"
 	ContextKeyAuthInfo  ContextKey = "authInfo"
+	ContextKeyScopes    ContextKey = "scopes"
 )

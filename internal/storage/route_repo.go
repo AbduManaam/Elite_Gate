@@ -34,9 +34,11 @@ const listQuery = `
 		r.match_type,
 		r.enabled,
 		r.policy_id,
-		COALESCE(p.auth_required, TRUE)  AS auth_required,
-		COALESCE(p.rate_limit_rpm, 0)    AS rate_limit_rpm,
+		COALESCE(p.auth_required, TRUE)   AS auth_required,
+		COALESCE(p.rate_limit_rpm, 0)     AS rate_limit_rpm,
 		COALESCE(p.allowed_origins, '{}') AS allowed_origins,
+		COALESCE(p.allowed_roles,   '{}') AS allowed_roles,
+		COALESCE(p.allowed_scopes,  '{}') AS allowed_scopes,
 		r.created_at,
 		r.updated_at
 	FROM   routes r
@@ -264,6 +266,8 @@ func scanRoute(s rowScanner) (model.Route, error) {
 		&rt.AuthRequired,
 		&rt.RateLimitRPM,
 		pq.Array(&rt.AllowedOrigins),
+		pq.Array(&rt.AllowedRoles),
+		pq.Array(&rt.AllowedScopes),
 		&rt.CreatedAt,
 		&rt.UpdatedAt,
 	)

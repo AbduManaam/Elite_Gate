@@ -123,7 +123,7 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 	}
 
 	if len(apiKeyVals) > 0 && in.authMiddleware.KeyStore != nil {
-		id, valid := in.authMiddleware.KeyStore.Validate(apiKeyVals[0])
+		rec, valid := in.authMiddleware.KeyStore.Validate(apiKeyVals[0])
 		if !valid {
 			in.logger.Warn().
 				Str("method", fullMethod).
@@ -131,10 +131,10 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 			return AuthInfo{}, status.Error(codes.Unauthenticated, "invalid api key")
 		}
 		in.logger.Debug().
-			Str("client_id", id).
+			Str("client_id", rec.ClientID).
 			Str("method", fullMethod).
 			Msg("auth: API key validated successfully")
-		return AuthInfo{ClientID: id, Role: "client"}, nil
+		return AuthInfo{ClientID: rec.ClientID, Role: "client"}, nil
 	}
 
 	in.logger.Warn().

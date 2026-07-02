@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"elitegate/helper"
 	"elitegate/internal/auth"
 	"elitegate/internal/model"
 	"elitegate/internal/shared"
@@ -14,7 +15,7 @@ import (
 )
 
 type APIKeyStore interface {
-	Validate(key string) (string, bool)
+	Validate(key string) (*auth.APIKeyRecord, bool)
 }
 
 type AuthMiddleware struct {
@@ -44,6 +45,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		var clientID, role string
+		var scopes []string
 
 		if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
 			tokenStr := strings.TrimPrefix(bearer, "Bearer ")
@@ -55,23 +57,52 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			clientID = claims.ClientID
 			role = claims.Role
+			scopes = []string{}
 		} else if key := r.Header.Get("X-API-Key"); key != "" && a.KeyStore != nil {
-			id, valid := a.KeyStore.Validate(key)
+			rec, valid := a.KeyStore.Validate(key)
 			if !valid {
 				httpJSON(w, http.StatusUnauthorized,
 					map[string]string{"error": "invalid api key"})
 				return
 			}
-			clientID = id
+			clientID = rec.ClientID
 			role = "client"
+			scopes = rec.Scopes
 		} else {
 			httpJSON(w, http.StatusUnauthorized,
 				map[string]string{"error": "authentication required"})
 			return
 		}
 
+		// ── ACL enforcement ──────────────────────────────────────────────────────
+		if rt != nil {
+			// Role check: if the route restricts roles, client must have one of them
+			if len(rt.AllowedRoles) > 0 && !helper.Contains(rt.AllowedRoles, role) {
+				a.Logger.Warn().
+					Str("path", r.URL.Path).
+					Str("client_id", clientID).
+					Str("client_role", role).
+					Strs("allowed_roles", rt.AllowedRoles).
+					Msg("authz: role not permitted")
+				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: role not permitted"})
+				return
+			}
+			// Scope check: client must have ALL required scopes
+			if len(rt.AllowedScopes) > 0 && !helper.HasAllScopes(scopes, rt.AllowedScopes) {
+				a.Logger.Warn().
+					Str("path", r.URL.Path).
+					Str("client_id", clientID).
+					Strs("client_scopes", scopes).
+					Strs("required_scopes", rt.AllowedScopes).
+					Msg("authz: missing required scopes")
+				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: insufficient scopes"})
+				return
+			}
+		}
+
 		ctx := context.WithValue(r.Context(), shared.ContextKeyClientID, clientID)
 		ctx = context.WithValue(ctx, shared.ContextKeyRole, role)
+		ctx = context.WithValue(ctx, shared.ContextKeyScopes, scopes)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
