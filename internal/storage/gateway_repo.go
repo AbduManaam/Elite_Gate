@@ -383,3 +383,86 @@ func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string) (
 	return gateways, nil
 }
 
+// MarkDraining transitions a gateway to "draining" and returns the
+// timestamp draining actually started at.
+//
+// It is safe to call repeatedly (retries, duplicate requests): the
+// COALESCE means only the *first* call sets drain_started_at — every
+// subsequent call, whether it wins the UPDATE or not, gets back the
+// same original timestamp so the caller can compute the remaining
+// wait instead of restarting or skipping it.
+func (r *GatewayRepo) MarkDraining(ctx context.Context, externalID string) (time.Time, error) {
+	const q = `
+		UPDATE gateways
+		SET    status           = 'draining',
+		       drain_started_at = COALESCE(drain_started_at, NOW()),
+		       updated_at       = NOW()
+		WHERE  external_id = $1
+		  AND  deleted_at  IS NULL
+		  AND  status NOT IN ('draining', 'decommissioned')
+		RETURNING drain_started_at
+	`
+	var startedAt time.Time
+	err := r.db.QueryRowContext(ctx, q, externalID).Scan(&startedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Either already draining, already decommissioned, or gone.
+		// Fall back to reading whatever drain_started_at is currently set to.
+		const qRead = `SELECT drain_started_at FROM gateways WHERE external_id = $1`
+		var nullable sql.NullTime
+		if readErr := r.db.QueryRowContext(ctx, qRead, externalID).Scan(&nullable); readErr != nil {
+			if errors.Is(readErr, sql.ErrNoRows) {
+				return time.Time{}, ErrGatewayNotFound
+			}
+			return time.Time{}, fmt.Errorf("MarkDraining read fallback %s: %w", externalID, readErr)
+		}
+		if !nullable.Valid {
+			// Status is "decommissioned" (drain_started_at was never set,
+			// e.g. gateway went straight from active -> decommissioned
+			// before this feature existed). Caller checks status separately.
+			return time.Time{}, nil
+		}
+		return nullable.Time, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("MarkDraining %s: %w", externalID, err)
+	}
+	return startedAt, nil
+}
+
+// StaleDrainingGateway is one row returned by ListStaleDraining.
+type StaleDrainingGateway struct {
+	ExternalID     string
+	DrainStartedAt time.Time
+}
+
+// ListStaleDraining returns gateways that have been sitting in "draining"
+// for longer than staleAfter — evidence that whatever request started the
+// drain never finished it (crash, client disconnect, etc.). Used by the
+// worker reconciler to finish the job.
+func (r *GatewayRepo) ListStaleDraining(ctx context.Context, staleAfter time.Duration) ([]StaleDrainingGateway, error) {
+	const q = `
+		SELECT external_id, drain_started_at
+		FROM   gateways
+		WHERE  status           = 'draining'
+		  AND  deleted_at       IS NULL
+		  AND  drain_started_at IS NOT NULL
+		  AND  drain_started_at < NOW() - $1::interval
+	`
+	rows, err := r.db.QueryContext(ctx, q, staleAfter.String())
+	if err != nil {
+		return nil, fmt.Errorf("ListStaleDraining: %w", err)
+	}
+	defer rows.Close()
+
+	var out []StaleDrainingGateway
+	for rows.Next() {
+		var g StaleDrainingGateway
+		if err := rows.Scan(&g.ExternalID, &g.DrainStartedAt); err != nil {
+			return nil, fmt.Errorf("scan stale draining row: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+

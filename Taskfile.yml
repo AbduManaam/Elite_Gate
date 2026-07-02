@@ -22,6 +22,7 @@ tasks:
       - build-gateway
       - build-admin
       - build-token
+      - build-worker
 
   build-gateway:
     desc: Build the gateway binary
@@ -40,6 +41,12 @@ tasks:
     cmds:
       - mkdir -p {{.BIN_DIR}}
       - go build -o {{.BIN_DIR}}/token{{exeExt}} {{.TOKEN_MAIN}}
+
+  build-worker:
+    desc: Build the worker binary
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/worker{{exeExt}} {{.WORKER_MAIN}}
 
   run-gateway:
     desc: Run gateway locally against localhost databases

@@ -28,6 +28,8 @@ type ServerConfig struct {
 	WriteTimeout        string            `mapstructure:"write_timeout"`
 	IdleTimeout         string            `mapstructure:"idle_timeout"`
 	ShutdownTimeout     string            `mapstructure:"shutdown_timeout"`
+	DrainTimeout        string            `mapstructure:"drain_timeout"`
+	DrainStaleAfter     string            `mapstructure:"drain_stale_after"`
 	GRPCGatewayPort     string            `mapstructure:"grpc_gateway_port"`
 	RouteReloadInterval string            `mapstructure:"route_reload_interval"`
 	ProjectID           string            `mapstructure:"project_id"`
@@ -83,6 +85,8 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("server.write_timeout", "30s")
 	viper.SetDefault("server.idle_timeout", "60s")
 	viper.SetDefault("server.shutdown_timeout", "30s")
+	viper.SetDefault("server.drain_timeout", "5s")
+	viper.SetDefault("server.drain_stale_after", "2m")
 	viper.SetDefault("server.grpc_gateway_port", ":50051")
 	viper.SetDefault("server.route_reload_interval", "10s")
 	viper.SetDefault("rate_limit.requests_per_minute", 100)
@@ -108,6 +112,8 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.write_timeout", "SERVER_WRITE_TIMEOUT")
 	viper.BindEnv("server.idle_timeout", "SERVER_IDLE_TIMEOUT")
 	viper.BindEnv("server.shutdown_timeout", "SERVER_SHUTDOWN_TIMEOUT")
+	viper.BindEnv("server.drain_timeout", "SERVER_DRAIN_TIMEOUT")
+	viper.BindEnv("server.drain_stale_after", "SERVER_DRAIN_STALE_AFTER")
 	viper.BindEnv("server.grpc_gateway_port", "GRPC_GATEWAY_PORT")
 	viper.BindEnv("server.route_reload_interval", "ROUTE_RELOAD_INTERVAL")
 	viper.BindEnv("app_env", "APP_ENV")
@@ -153,6 +159,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if err := validateDuration("server.shutdown_timeout", cfg.Server.ShutdownTimeout); err != nil {
+		return nil, err
+	}
+	if err := validateDuration("server.drain_timeout", cfg.Server.DrainTimeout); err != nil {
+		return nil, err
+	}
+	if err := validateDuration("server.drain_stale_after", cfg.Server.DrainStaleAfter); err != nil {
 		return nil, err
 	}
 	if err := validateDuration("server.route_reload_interval", cfg.Server.RouteReloadInterval); err != nil {

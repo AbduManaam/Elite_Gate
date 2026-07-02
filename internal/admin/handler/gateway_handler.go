@@ -21,11 +21,13 @@ type GatewayHandler struct {
 	repo         *storage.GatewayRepo
 	containerMgr container.ContainerManager
 	logger       zerolog.Logger
+	drainTimeout time.Duration
 }
 
 func NewGatewayHandler(
 	repo *storage.GatewayRepo,
 	containerMgr container.ContainerManager,
+	drainTimeout time.Duration,
 ) *GatewayHandler {
 	// Ensure logs directory exists.
 	if err := os.MkdirAll("logs", 0755); err != nil {
@@ -51,6 +53,7 @@ func NewGatewayHandler(
 		repo:         repo,
 		containerMgr: containerMgr,
 		logger:       logger,
+		drainTimeout: drainTimeout,
 	}
 }
 
@@ -136,8 +139,14 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 // Decommission handles DELETE /admin/v1/projects/:projectId/gateways/:gatewayId
 //
 // Flow:
-//  1. Stop and remove the Docker container (idempotent — ok if already gone).
-//  2. Soft-delete the DB row.
+//  1. Check status. If active, transition to "draining" and wait out the
+//     remaining drain window (idempotent against retries — see MarkDraining).
+//  2. Stop and remove the Docker container (idempotent).
+//  3. Mark decommissioned / soft-delete the DB row.
+//
+// A gateway that never makes it past step 1 (process restart, client
+// disconnect) is picked up and finished by the worker reconciler in
+// cmd/worker — see ListStaleDraining.
 func (h *GatewayHandler) Decommission(c *gin.Context) {
 	externalID := c.Param("gatewayId")
 	if externalID == "" {
@@ -153,9 +162,57 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info().Str("external_id", externalID).Msg("decommissioning gateway")
+	h.logger.Info().Str("external_id", externalID).Msg("initiating graceful decommission of gateway")
 
-	// Step 1 — stop and remove the container.
+	status, err := h.repo.GetGatewayStatus(c.Request.Context(), externalID)
+	if err != nil {
+		if errors.Is(err, storage.ErrGatewayNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+			return
+		}
+		h.logger.Error().Err(err).Str("external_id", externalID).Msg("failed to retrieve gateway status")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	if status == "decommissioned" {
+		c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+		return
+	}
+
+	// Step 1 — mark draining (idempotent) and wait out whatever time is
+	// left on the drain window. drainStartedAt is stable across retries,
+	// so a duplicate request never shortens or restarts the wait.
+	drainStartedAt, err := h.repo.MarkDraining(c.Request.Context(), externalID)
+	if err != nil {
+		h.logger.Error().Err(err).Str("external_id", externalID).Msg("failed to mark gateway as draining")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initiate draining"})
+		return
+	}
+
+	if remaining := h.drainTimeout - time.Since(drainStartedAt); remaining > 0 {
+		h.logger.Info().
+			Str("external_id", externalID).
+			Dur("remaining", remaining).
+			Msg("draining: waiting for in-flight/upstream routing to clear")
+		select {
+		case <-c.Request.Context().Done():
+			// The client went away mid-wait. The row is already marked
+			// "draining" (excluded from ListActive), so no traffic is
+			// being lost by returning here — the worker reconciler will
+			// finish stopping the container and finalizing the DB row
+			// once drain_stale_after elapses. We deliberately do NOT
+			// treat this as an error requiring the caller to retry.
+			h.logger.Warn().Str("external_id", externalID).
+				Msg("client disconnected during drain wait; worker reconciler will finish decommission")
+			c.JSON(http.StatusAccepted, gin.H{"gateway_id": externalID, "status": "draining"})
+			return
+		case <-time.After(remaining):
+		}
+	}
+
+	// Step 2 — stop and remove the container gracefully.
+	h.logger.Info().Str("external_id", externalID).Msg("stopping and removing gateway container runtime")
 	if err := h.containerMgr.Decommission(c.Request.Context(), externalID); err != nil {
 		h.logger.Error().Err(err).
 			Str("external_id", externalID).
@@ -166,17 +223,15 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 		return
 	}
 
-	// Step 2 — soft-delete in the DB.
+	// Step 3 — finalize decommission (soft-delete DB row).
+	h.logger.Info().Str("external_id", externalID).Msg("finalizing decommission in DB")
 	if err := h.repo.Decommission(c.Request.Context(), externalID); err != nil {
 		if errors.Is(err, storage.ErrGatewayNotFound) {
-			// Check if it is actually in the DB but already decommissioned (soft-deleted).
 			status, statusErr := h.repo.GetGatewayStatus(c.Request.Context(), externalID)
 			if statusErr == nil && status == "decommissioned" {
 				c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
 				return
 			}
-
-			// If it doesn't exist in the DB at all, return 404.
 			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 			return
 		}

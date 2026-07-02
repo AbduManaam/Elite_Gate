@@ -63,7 +63,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	projectHandler := handler.NewProjectHandler(projectRepo, logger)
 	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
-	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr)
+	drainTimeout, err := time.ParseDuration(cfg.Server.DrainTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("parse server.drain_timeout: %w", err)
+	}
+	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr, drainTimeout)
 	syncHandler := handler.NewSyncHandler(gatewayRepo, logger)
 	platformHandler := handler.NewPlatformHandler(
 		projectRepo, gatewayRepo, authRepo, containerMgr, syncHandler, logger,
