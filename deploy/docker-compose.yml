@@ -1,6 +1,4 @@
 #Infrastructure configuration file
-#Infrastructure configuration file
-
 
 services:
   postgres:
@@ -106,17 +104,17 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
 
-    volumes:
-      - ./grafana-data:/var/lib/grafana
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-
     networks:
       - elitegate_net
 
-volumes:
-  pg_data:
+    volumes:
+      - ./grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
 
 networks:
   elitegate_net:
     name: elitegate_net
     external: true
+
+volumes:
+  pg_data:

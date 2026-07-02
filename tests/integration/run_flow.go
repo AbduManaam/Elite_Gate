@@ -1,4 +1,4 @@
-package main
+package integration
 
 import (
 	"bytes"
@@ -30,7 +30,7 @@ func main() {
 	company := fmt.Sprintf("TestCompany_%s", randomSuffix)
 
 	fmt.Printf("\n--- Step 0: Verify Seeded Public Sample Services (Default Project) ---\n")
-	
+
 	// 1. Verify user service
 	fmt.Printf("Requesting seeded User Service route: GET %s/api/users\n", gatewayURL)
 	code, body, err := getRequest(gatewayURL+"/api/users", map[string]string{})
@@ -74,10 +74,10 @@ func main() {
 		fmt.Printf("❌ Signup failed: %v\n", err)
 		return
 	}
-	
+
 	accessToken, _ := signupRes["access_token"].(string)
 	projectID, _ := signupRes["project_id"].(string)
-	
+
 	if accessToken == "" || projectID == "" {
 		fmt.Printf("❌ Failed to parse signup response: %+v\n", signupRes)
 		return
@@ -102,7 +102,7 @@ func main() {
 		fmt.Printf("❌ Upstream creation failed: %v\n", err)
 		return
 	}
-	
+
 	upstreamData, _ := upstreamRes["upstream"].(map[string]interface{})
 	upstreamID, _ := upstreamData["id"].(string)
 	if upstreamID == "" {
@@ -137,7 +137,7 @@ func main() {
 		fmt.Printf("❌ Policy creation failed: %v\n", err)
 		return
 	}
-	
+
 	policyData, _ := policyRes["policy"].(map[string]interface{})
 	policyID, _ := policyData["id"].(string)
 	if policyID == "" {
@@ -162,7 +162,7 @@ func main() {
 		fmt.Printf("❌ Route creation failed: %v\n", err)
 		return
 	}
-	
+
 	routeData, _ := routeRes["route"].(map[string]interface{})
 	routeID, _ := routeData["id"].(string)
 	if routeID == "" {
@@ -180,7 +180,7 @@ func main() {
 		fmt.Printf("❌ API Key creation failed: %v\n", err)
 		return
 	}
-	
+
 	apiKey, _ := keyRes["api_key"].(string)
 	apiKeyID, _ := keyRes["id"].(string)
 	if apiKey == "" {
@@ -190,7 +190,7 @@ func main() {
 	fmt.Printf("✅ API Key created successfully! ID: %s, Raw Key: %s\n", apiKeyID, apiKey)
 
 	fmt.Printf("\n--- Step 6: Deploy/Reload Configuration ---\n")
-	reloadRes, err := postRequest(fmt.Sprintf("%s/admin/v1/projects/%s/reload", adminURL, projectID), nil, accessToken)
+	reloadRes, err := postRequest(adminURL+"/admin/v1/reload", nil, accessToken)
 	if err != nil {
 		fmt.Printf("❌ Reload trigger failed: %v\n", err)
 		return
@@ -210,7 +210,7 @@ func main() {
 	fmt.Printf("\n--- Step 7: Gateway serves traffic (Test via Shared Gateway on port 8080) ---\n")
 	testURL := fmt.Sprintf("%s%s", gatewayURL, routePath)
 	fmt.Printf("Making HTTP GET request to Shared Gateway: %s\n", testURL)
-	
+
 	// Test request without API Key (should fail with 401)
 	code, body, err = getRequest(testURL, map[string]string{})
 	if err != nil {
@@ -248,11 +248,11 @@ func main() {
 		fmt.Printf("❌ Dedicated gateway provisioning failed: %v\n", err)
 		return
 	}
-	
+
 	gatewayID, _ := provisionRes["gateway_id"].(string)
 	internalIP, _ := provisionRes["endpoint_ip"].(string)
 	internalPort, _ := provisionRes["gateway_port"].(string)
-	
+
 	fmt.Printf("✅ Dedicated Gateway provisioned in Docker!\n")
 	fmt.Printf("   Gateway ID:      %s\n", gatewayID)
 	fmt.Printf("   Internal IP:     %s\n", internalIP)
@@ -261,7 +261,7 @@ func main() {
 	fmt.Printf("\n--- Step 9: Retrieve host port of Dedicated Gateway ---\n")
 	containerName := fmt.Sprintf("elitegate-gateway-%s", gatewayID)
 	fmt.Printf("Querying Docker for port mappings of container: %s\n", containerName)
-	
+
 	hostPort, err := getDockerHostPort(containerName)
 	if err != nil {
 		fmt.Printf("❌ Failed to query Docker host port: %v\n", err)
@@ -293,7 +293,7 @@ func main() {
 	fmt.Printf("\n--- Step 11: Decommission Dedicated Gateway ---\n")
 	fmt.Printf("Cleaning up: Decommissioning gateway %s...\n", gatewayID)
 	decomURL := fmt.Sprintf("%s/admin/v1/projects/%s/gateways/%s", adminURL, projectID, gatewayID)
-	
+
 	req, err := http.NewRequest(http.MethodDelete, decomURL, nil)
 	if err != nil {
 		fmt.Printf("❌ Failed to build delete request: %v\n", err)
@@ -323,7 +323,7 @@ func postRequest(url string, reqBody map[string]interface{}, token string) (map[
 			return nil, err
 		}
 	}
-	
+
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		return nil, err
@@ -392,17 +392,17 @@ func getDockerHostPort(containerName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cmd run: %w, stderr: %s", err, stderr.String())
 	}
-	
+
 	// Output is of format e.g. "0.0.0.0:49153" or "[::]:49153"
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {
 		return "", fmt.Errorf("empty stdout from docker port")
 	}
-	
+
 	// Parse out port
 	lines := strings.Split(output, "\n")
 	firstLine := strings.TrimSpace(lines[0])
-	
+
 	// Regex to extract port at the end after colon
 	re := regexp.MustCompile(`:(\d+)$`)
 	matches := re.FindStringSubmatch(firstLine)

@@ -18,6 +18,8 @@ type Route struct {
 	AuthRequired   bool      `json:"auth_required"`  // read-only: joined from policies
 	RateLimitRPM   int       `json:"rate_limit_rpm"` // read-only: joined from policies
 	AllowedOrigins []string  `json:"allowed_origins"`
+	AllowedRoles   []string  `json:"allowed_roles"`
+	AllowedScopes  []string  `json:"allowed_scopes"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

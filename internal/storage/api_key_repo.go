@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/auth"
 
 	"github.com/rs/zerolog"
@@ -352,7 +353,7 @@ func (r *ApiKeyRepo) FindByHash(
 	hash string,
 ) (*auth.APIKeyRecord, error) {
 	r.logger.Debug().
-		Str("hash_prefix", safePrefix(hash, 8)).
+		Str("hash_prefix", helper.SafePrefix(hash, 8)).
 		Msg("FindByHash: global api_key lookup")
 
 	const q = `
@@ -372,7 +373,7 @@ func (r *ApiKeyRepo) FindByHash(
 		Scan(&projectID, &status, &expiresAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		r.logger.Debug().
-			Str("hash_prefix", safePrefix(hash, 8)).
+			Str("hash_prefix", helper.SafePrefix(hash, 8)).
 			Msg("FindByHash: api_key not found")
 		return nil, nil // cache miss → caller treats as invalid
 	}
@@ -385,7 +386,7 @@ func (r *ApiKeyRepo) FindByHash(
 	if deletedAt.Valid {
 		revokedAt = &deletedAt.Time
 		r.logger.Debug().
-			Str("hash_prefix", safePrefix(hash, 8)).
+			Str("hash_prefix", helper.SafePrefix(hash, 8)).
 			Msg("FindByHash: api_key is soft-deleted (revoked)")
 	}
 
@@ -421,11 +422,4 @@ func hashRawKey(rawKey string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// Return the first n characters of a string.
-// Used to hide the full hash in logs.
-func safePrefix(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
+
