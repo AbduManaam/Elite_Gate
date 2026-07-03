@@ -72,7 +72,8 @@ type BaseRepo struct {
 	logger zerolog.Logger
 }
 
-/*setTenantSession sets tenant information in PostgreSQL
+/*
+setTenantSession sets tenant information in PostgreSQL
 for the current transaction only.
 
 app.project_id      = which project (tenant) is being accessed
@@ -84,7 +85,8 @@ and is automatically removed when the transaction ends.
 Flow:
 1. setTenantSession() sets app.project_id
 2. RLS policies use that value
-3. The user can access only data from their own project*/
+3. The user can access only data from their own project
+*/
 func (r *BaseRepo) setTenantSession(ctx context.Context, tx *sql.Tx, projectID uuid.UUID, userID uuid.UUID) error {
 	r.logger.Trace().
 		Str("project_id", projectID.String()).
@@ -342,8 +344,30 @@ func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID) (
 		}
 		members = append(members, m)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
-	}
 	return members, nil
+}
+
+type MemberLookupResult struct {
+	ID       uuid.UUID `json:"id"`
+	Username string    `json:"username"`
+	Email    string    `json:"email"`
+}
+
+func (r *MembershipRepo) FindUserByEmail(ctx context.Context, email string) (MemberLookupResult, error) {
+	const q = `
+		SELECT id, username, email
+		FROM   admin_users
+		WHERE  email = $1
+		  AND  is_active  = TRUE
+		  AND  deleted_at IS NULL
+	`
+	var res MemberLookupResult
+	err := r.db.QueryRowContext(ctx, q, email).Scan(&res.ID, &res.Username, &res.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return MemberLookupResult{}, sql.ErrNoRows
+		}
+		return MemberLookupResult{}, fmt.Errorf("FindUserByEmail: %w", err)
+	}
+	return res, nil
 }

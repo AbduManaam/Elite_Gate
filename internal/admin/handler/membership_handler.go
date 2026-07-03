@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 
 	adminmw "elitegate/internal/admin/middleware"
@@ -24,8 +26,8 @@ func NewMembershipHandler(repo *storage.MembershipRepo, logger zerolog.Logger) *
 var validMemberRoles = map[string]bool{"owner": true, "editor": true, "viewer": true}
 
 type addMemberRequest struct {
-	AdminUserID string `json:"admin_user_id" binding:"required"`
-	Role        string `json:"role" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
+	Role  string `json:"role" binding:"required"`
 }
 
 type changeRoleRequest struct {
@@ -50,11 +52,18 @@ func (h *MembershipHandler) AddMember(c *gin.Context) {
 		return
 	}
 
-	userID, err := uuid.Parse(req.AdminUserID)
+	// Resolve email to user UUID
+	target, err := h.repo.FindUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no active user found with email '%s'", req.Email)})
+			return
+		}
+		h.logger.Error().Err(err).Str("email", req.Email).Msg("failed to lookup user by email")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
+	userID := target.ID
 
 	inviterIDVal, exists := c.Get(adminmw.AdminUserIDKey)
 	if !exists {
@@ -82,6 +91,27 @@ func (h *MembershipHandler) AddMember(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"message": "member added successfully"})
+}
+
+func (h *MembershipHandler) LookupMemberByEmail(c *gin.Context) {
+	email := c.Query("email")
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email query parameter is required"})
+		return
+	}
+
+	target, err := h.repo.FindUserByEmail(c.Request.Context(), email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no active user found with that email"})
+			return
+		}
+		h.logger.Error().Err(err).Str("email", email).Msg("failed to lookup user by email")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"user": target})
 }
 
 func (h *MembershipHandler) ChangeRole(c *gin.Context) {

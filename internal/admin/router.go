@@ -12,6 +12,7 @@ import (
 	"elitegate/internal/config"
 	"elitegate/internal/container"
 	"elitegate/internal/ipfilter"
+	"elitegate/internal/ratelimit"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	{
 		membershipRepo := storage.NewMembershipRepo(db, logger)
 		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger)
+		userLookupLimiter := ratelimit.NewMemoryLimiter(20) // 20 lookups/min per caller
+		userLookupLimit := middleware.UserLookupRateLimit(userLookupLimiter, 20)
 
 		// Project Management
 		v1.POST("/projects", projectHandler.Create)
@@ -170,6 +173,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			members := projectGroup.Group("/members")
 			{
 				members.GET("", middleware.RBAC(middleware.RoleViewer), membershipHandler.List)
+				members.GET("/lookup", middleware.RBAC(middleware.RoleOwner), userLookupLimit, membershipHandler.LookupMemberByEmail)
 				members.POST("", middleware.RBAC(middleware.RoleOwner), membershipHandler.AddMember)
 				members.PUT("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.ChangeRole)
 				members.DELETE("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.RemoveMember)
