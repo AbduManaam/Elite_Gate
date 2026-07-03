@@ -1,0 +1,39 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: elitegate-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: elitegate
+          __path__: /var/log/elitegate/*.log
+
+    pipeline_stages:
+      # Parse the zerolog JSON body so fields are queryable at query time
+      # (e.g. `| json | request_id="..."`, `| json | route="..."`).
+      - json:
+          expressions:
+            level: level
+            request_id: request_id
+            route: route
+            status: status
+
+      # Only "level" becomes an actual Loki label. It's low-cardinality
+      # (info/warn/error/debug), so it's cheap and useful to filter by
+      # directly in the label selector, e.g. {job="elitegate", level="error"}.
+      #
+      # request_id, route, and status are deliberately NOT labeled — they're
+      # high-cardinality (route/status less so, but still avoid combinatorial
+      # label sets). They stay queryable via the `json` parser at query time
+      # instead, without multiplying the number of streams Loki has to track.
+      - labels:
+          level:

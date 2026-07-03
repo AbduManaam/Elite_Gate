@@ -24,18 +24,23 @@ func RequestLogger(logger zerolog.Logger) func(http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), shared.ContextKeyRequestID, requestID)
 
 			// Wrap writer to capture status code
-			wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			wrapped := &statusWriter{ResponseWriter: w}
 
 			// Run the next middleware/handler
 			next.ServeHTTP(wrapped, r.WithContext(ctx))
 
 			// Log after the request completes
+			status := wrapped.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+
 			logger.Info().
 				Str("request_id", requestID).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("remote_ip", r.RemoteAddr).
-				Int("status", wrapped.status).
+				Int("status", status).
 				Dur("latency", time.Since(start)).
 				Str("user_agent", r.UserAgent()).
 				Msg("request")

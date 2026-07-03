@@ -18,9 +18,10 @@ var (
 	// HTTPRequestDuration tracks the latency of HTTP requests in seconds
 	HTTPRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "gateway_http_request_duration_seconds",
-			Help:    "Latency of HTTP requests in seconds",
-			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+			Name: "gateway_http_request_duration_seconds",
+			Help: "Latency of HTTP requests in seconds",
+			// Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+			Buckets: []float64{1, 50, 100, 200, 300, 400, 500},
 		},
 		[]string{"path", "method", "status", "upstream"},
 	)

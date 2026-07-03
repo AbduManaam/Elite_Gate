@@ -94,6 +94,30 @@ services:
     networks:
       - elitegate_net
 
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: elitegate_loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - elitegate_net
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    container_name: elitegate_promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - ../logs:/var/log/elitegate:ro
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - elitegate_net
+
   grafana:
     image: grafana/grafana:latest
     container_name: elitegate_grafana
@@ -118,3 +142,5 @@ networks:
 
 volumes:
   pg_data:
+  loki-data:
+  promtail-positions:

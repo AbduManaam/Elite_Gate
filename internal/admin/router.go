@@ -16,6 +16,7 @@ import (
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 )
 
@@ -31,6 +32,9 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			"service": "admin-api",
 		})
 	})
+
+	//  Metrics for Prometheus
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	r.GET("/ready", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
