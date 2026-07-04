@@ -21,8 +21,8 @@ type Status struct {
 // Runs concurrent health checks for upstream services and store their status.
 type Checker struct {
 	mu          sync.RWMutex
-	statuses    map[string]*Status  // key = upstream base URL
-	healthPaths map[string]string   // key = upstream base URL, value = health path (e.g. "/health")
+	statuses    map[string]*Status // key = upstream base URL
+	healthPaths map[string]string  // key = upstream base URL, value = health path (e.g. "/health")
 
 	client       *http.Client
 	interval     time.Duration

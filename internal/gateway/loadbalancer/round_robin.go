@@ -26,7 +26,7 @@ func (r *RoundRobin) Pick(pool []Target) (Target, error) {
 
 func (r *RoundRobin) Release(_ Target) {}
 
-//Convert server weights into multiple slots so that servers with higher weights are selected more often by the normal round-robin algorithm.
+// Convert server weights into multiple slots so that servers with higher weights are selected more often by the normal round-robin algorithm.
 func expandByWeight(pool []Target) []Target {
 	const maxWeight = 100
 

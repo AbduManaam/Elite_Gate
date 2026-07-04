@@ -30,7 +30,7 @@ type AdminTokenManager struct {
 	issuer string
 }
 
-func NewAdminTokenManager(secret,issuer string,) (*AdminTokenManager, error) {
+func NewAdminTokenManager(secret, issuer string) (*AdminTokenManager, error) {
 
 	if len([]byte(secret)) < MinJWTSecretByteLength {
 		return nil, fmt.Errorf(
@@ -80,7 +80,7 @@ func (m *AdminTokenManager) CreateAdminAccessToken(
 	return token.SignedString(m.secret)
 }
 
-func (m *AdminTokenManager) ValidateAdminAccessToken(raw string,) (*AdminClaims, error) {
+func (m *AdminTokenManager) ValidateAdminAccessToken(raw string) (*AdminClaims, error) {
 
 	token, err := jwt.ParseWithClaims(
 		raw,

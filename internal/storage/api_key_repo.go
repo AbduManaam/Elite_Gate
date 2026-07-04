@@ -434,5 +434,3 @@ func hashRawKey(rawKey string) string {
 	h := sha256.Sum256([]byte(rawKey))
 	return fmt.Sprintf("%x", h)
 }
-
-

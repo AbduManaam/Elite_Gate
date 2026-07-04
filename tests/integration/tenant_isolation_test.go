@@ -168,7 +168,6 @@ func TestTenantIsolation(t *testing.T) {
 		_, _ = db.ExecContext(ctx, "DELETE FROM gateways WHERE external_id = 'gw_test_alpha_rls'")
 	}()
 
-
 	// Query gateways using TenantContext B (should NOT return gw_test_alpha_rls)
 	gatewaysB, err := gatewayRepo.ListByProject(tenantCtxB, projectB.String())
 	if err != nil {
@@ -304,4 +303,3 @@ func TestGatewayListAllForAdmin(t *testing.T) {
 		t.Errorf("Admin B should see their own gateway 'gw_test_beta_all'")
 	}
 }
-

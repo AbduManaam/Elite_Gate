@@ -20,8 +20,8 @@ func NewUpstreamRepo(db *sql.DB, logger zerolog.Logger) *UpstreamRepo {
 }
 
 var (
-	ErrUpstreamNotFound      = errors.New("upstream not found")
-	ErrUpstreamNameConflict  = errors.New("upstream name already exists")
+	ErrUpstreamNotFound     = errors.New("upstream not found")
+	ErrUpstreamNameConflict = errors.New("upstream name already exists")
 )
 
 func (r *UpstreamRepo) Create(ctx context.Context, u *model.Upstream) error {

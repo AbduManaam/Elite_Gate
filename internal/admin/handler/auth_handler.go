@@ -10,7 +10,6 @@ package handler
 //   ↓
 // Logout / revoke refresh token
 
-
 import (
 	"database/sql"
 	"errors"
@@ -30,7 +29,7 @@ import (
 
 const (
 	maxLoginFailures = 5
-	lockoutDuration = 15 * time.Minute
+	lockoutDuration  = 15 * time.Minute
 	maxAuthBodyBytes = 1 << 20
 )
 
@@ -281,8 +280,8 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	}
 
 	user, err := h.repo.FindAdminUserByID(
-	c.Request.Context(),
-	token.AdminUserID,
+		c.Request.Context(),
+		token.AdminUserID,
 	)
 	if err != nil {
 		h.internal(c, err)
@@ -597,4 +596,3 @@ func (h *AuthHandler) internal(c *gin.Context, err error) {
 		"error": "internal server error",
 	})
 }
-

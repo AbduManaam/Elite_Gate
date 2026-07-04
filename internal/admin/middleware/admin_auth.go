@@ -1,4 +1,5 @@
 package middleware
+
 // 1. Read Authorization header
 // 2. Extract JWT token
 // 3. Validate token

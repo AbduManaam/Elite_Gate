@@ -198,7 +198,6 @@ func (r *GatewayRepo) GetGatewayStatusPlatform(ctx context.Context, externalID s
 	return status, nil
 }
 
-
 // ListActive returns all non-deleted gateways in the "active" state.
 // This is a global query used by the platform control plane, not scoped to a tenant.
 func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
@@ -464,5 +463,3 @@ func (r *GatewayRepo) ListStaleDraining(ctx context.Context, staleAfter time.Dur
 	}
 	return out, rows.Err()
 }
-
-

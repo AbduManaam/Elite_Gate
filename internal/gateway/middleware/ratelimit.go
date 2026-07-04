@@ -39,7 +39,7 @@ func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
 		if clientID == "" {
 			clientID = extractIP(r)
 		}
-		
+
 		key := fmt.Sprintf("%s:%s", clientID, r.URL.Path)
 
 		current := rl.limiter.Count(key)

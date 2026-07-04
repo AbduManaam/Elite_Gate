@@ -9,7 +9,7 @@ type AuditLog struct {
 	Action      string    `json:"action"`
 	EntityType  string    `json:"entity_type"`
 	EntityID    string    `json:"entity_id"`
-	Changes     string    `json:"changes"` 
+	Changes     string    `json:"changes"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

@@ -14,7 +14,7 @@ func NewLeastConn() *LeastConn {
 }
 func (l *LeastConn) Name() string { return "least_conn" }
 
-//Find the server with the fewest active requests, increase its count, and return that server.
+// Find the server with the fewest active requests, increase its count, and return that server.
 func (l *LeastConn) Pick(pool []Target) (Target, error) {
 	if len(pool) == 0 {
 		return Target{}, ErrNoHealthyTargets
