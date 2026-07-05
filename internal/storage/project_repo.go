@@ -381,3 +381,80 @@ func (r *ProjectRepo) IsActive(ctx context.Context, projectID string) (bool, err
 	}
 	return active, nil
 }
+
+// GetSummary returns the project row plus aggregated dashboard counts in a
+// single query. Runs inside withTenantTx so app.project_id is set for the
+// duration of the transaction — routes/upstreams/policies/api_keys/gateways/
+// audit_logs are all RLS-scoped by that session variable automatically.
+// project_members has NO RLS policy, so it's filtered explicitly below.
+func (r *ProjectRepo) GetSummary(ctx context.Context) (*model.ProjectSummary, error) {
+	tc, err := TenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var summary model.ProjectSummary
+	var metrics model.ProjectSummaryMetrics
+	var dbPlan string
+
+	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		const q = `
+			SELECT
+				p.name,
+				p.slug,
+				COALESCE(p.description, ''),
+				p.is_active,
+				p.plan,
+				p.created_at,
+				p.updated_at,
+				(SELECT COUNT(*) FROM gateways  WHERE deleted_at IS NULL)                          AS total_gateways,
+				(SELECT COUNT(*) FROM routes    WHERE deleted_at IS NULL)                          AS total_routes,
+				(SELECT COUNT(*) FROM routes    WHERE deleted_at IS NULL AND enabled = TRUE)        AS enabled_routes,
+				(SELECT COUNT(*) FROM upstreams WHERE deleted_at IS NULL)                          AS total_upstreams,
+				(SELECT COUNT(*) FROM upstreams WHERE deleted_at IS NULL AND enabled = TRUE)        AS enabled_upstreams,
+				(SELECT COUNT(*) FROM policies  WHERE deleted_at IS NULL)                          AS total_policies,
+				(SELECT COUNT(*) FROM api_keys  WHERE deleted_at IS NULL)                          AS total_api_keys,
+				(SELECT COUNT(*) FROM api_keys  WHERE deleted_at IS NULL AND status = 'active')     AS active_api_keys,
+				(SELECT COUNT(*) FROM audit_logs
+				 WHERE created_at >= NOW() - INTERVAL '4 days')                                    AS total_audit_logs_4d,
+				(SELECT COUNT(*) FROM project_members pm
+				 JOIN admin_users au ON au.id = pm.admin_user_id
+				 WHERE pm.project_id = p.id AND au.deleted_at IS NULL)                             AS total_members
+			FROM projects p
+			WHERE p.id = $1 AND p.deleted_at IS NULL
+		`
+		return tx.QueryRowContext(ctx, q, tc.ProjectID).Scan(
+			&summary.Name,
+			&summary.Slug,
+			&summary.Description,
+			&summary.IsActive,
+			&dbPlan,
+			&summary.CreatedAt,
+			&summary.UpdatedAt,
+			&metrics.TotalGateways,
+			&metrics.TotalRoutes,
+			&metrics.EnabledRoutes,
+			&metrics.TotalUpstreams,
+			&metrics.EnabledUpstreams,
+			&metrics.TotalPolicies,
+			&metrics.TotalAPIKeys,
+			&metrics.ActiveAPIKeys,
+			&metrics.TotalAuditLogs4d,
+			&metrics.TotalMembers,
+		)
+	})
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, fmt.Errorf("get project summary: %w", err)
+	}
+
+	summary.ID = tc.ProjectID.String()
+	summary.Plan = &dbPlan
+	summary.Metrics = metrics
+
+	return &summary, nil
+}
+

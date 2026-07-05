@@ -82,8 +82,15 @@
 					"request": {
 						"url": "{{admin_url}}/admin/login",
 						"method": "POST",
-						"auth": { "type": "noauth" },
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"auth": {
+							"type": "noauth"
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"username\": \"admin\",\n  \"password\": \"your-password\"\n}"
@@ -109,8 +116,15 @@
 					"request": {
 						"url": "{{admin_url}}/admin/refresh",
 						"method": "POST",
-						"auth": { "type": "noauth" },
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"auth": {
+							"type": "noauth"
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"refresh_token\": \"your-refresh-token\"\n}"
@@ -123,8 +137,15 @@
 					"request": {
 						"url": "{{admin_url}}/admin/logout",
 						"method": "POST",
-						"auth": { "type": "noauth" },
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"auth": {
+							"type": "noauth"
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"refresh_token\": \"your-refresh-token\"\n}"
@@ -137,8 +158,15 @@
 					"request": {
 						"url": "{{admin_url}}/admin/register",
 						"method": "POST",
-						"auth": { "type": "noauth" },
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"auth": {
+							"type": "noauth"
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"username\": \"admin\",\n  \"password\": \"your-password\"\n}"
@@ -151,8 +179,15 @@
 					"request": {
 						"url": "{{admin_url}}/admin/signup",
 						"method": "POST",
-						"auth": { "type": "noauth" },
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"auth": {
+							"type": "noauth"
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"username\": \"mycompany\",\n  \"password\": \"your-password\",\n  \"company\": \"My Company Inc.\",\n  \"plan\": \"free\"\n}"
@@ -184,7 +219,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"My Project\",\n  \"slug\": \"my-project\",\n  \"description\": \"My first project\",\n  \"plan\": \"free\"\n}"
@@ -218,7 +258,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}",
 						"method": "PUT",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Updated Project\",\n  \"description\": \"Updated description\"\n}"
@@ -252,7 +297,9 @@
 					"request": {
 						"url": "{{gateway_url}}/reload",
 						"method": "POST",
-						"auth": { "type": "noauth" },
+						"auth": {
+							"type": "noauth"
+						},
 						"description": "Directly reload a single gateway node's cache (internal/admin use)."
 					}
 				}
@@ -273,7 +320,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Users API\",\n  \"path\": \"/api/users\",\n  \"upstream_id\": \"UPSTREAM_UUID\",\n  \"methods\": [\"GET\", \"POST\"],\n  \"match_type\": \"prefix\",\n  \"enabled\": true\n}"
@@ -285,7 +337,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID",
 						"method": "PUT",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Users API\",\n  \"path\": \"/api/users\",\n  \"upstream_id\": \"UPSTREAM_UUID\",\n  \"methods\": [\"GET\", \"POST\"],\n  \"match_type\": \"prefix\",\n  \"enabled\": true\n}"
@@ -323,7 +380,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"User Service\",\n  \"target_url\": \"http://user-service.internal:3000\",\n  \"protocol\": \"http\",\n  \"health_path\": \"/health\",\n  \"enabled\": true\n}"
@@ -335,7 +397,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID",
 						"method": "PUT",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"User Service\",\n  \"target_url\": \"http://user-service.internal:3000\",\n  \"protocol\": \"http\",\n  \"health_path\": \"/health\",\n  \"enabled\": true\n}"
@@ -380,7 +447,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/upstreams/UPSTREAM_ID/targets",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"target_url\": \"http://backend-1.internal:3000\",\n  \"weight\": 1,\n  \"enabled\": true\n}"
@@ -411,7 +483,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Strict Policy\",\n  \"auth_required\": true,\n  \"rate_limit_rpm\": 100,\n  \"allowed_origins\": [\"https://myapp.com\"]\n}"
@@ -423,7 +500,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/policies/POLICY_ID",
 						"method": "PUT",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Strict Policy\",\n  \"auth_required\": true,\n  \"rate_limit_rpm\": 200,\n  \"allowed_origins\": [\"https://myapp.com\"]\n}"
@@ -442,7 +524,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/routes/ROUTE_ID/policy",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"policy_id\": \"POLICY_ID\"\n}"
@@ -475,7 +562,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/keys",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"name\": \"Production Key\",\n  \"expires_at\": \"2026-12-31T23:59:59Z\"\n}"
@@ -516,7 +608,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"admin_user_id\": \"USER_UUID\",\n  \"role\": \"editor\"\n}"
@@ -529,7 +626,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/members/MEMBER_ID",
 						"method": "PUT",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"role\": \"viewer\"\n}"
@@ -568,7 +670,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/projects/{{project_id}}/gateways",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"project_id\": \"{{project_id}}\",\n  \"plan\": \"free\"\n}"
@@ -663,7 +770,12 @@
 					"request": {
 						"url": "{{admin_url}}/admin/v1/admins",
 						"method": "POST",
-						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
 						"body": {
 							"mode": "raw",
 							"raw": "{\n  \"username\": \"new-admin\",\n  \"password\": \"secure-password\"\n}"
@@ -681,10 +793,16 @@
 					"request": {
 						"url": "{{gateway_url}}/api/users",
 						"method": "GET",
-						"auth": { "type": "noauth" },
+						"auth": {
+							"type": "noauth"
+						},
 						"description": "Send a request through the dedicated gateway. The path is matched dynamically.\nRequires API key via x-api-key header or query param.\nThis is an example — replace /api/users with any route you configured.",
 						"header": [
-							{ "key": "x-api-key", "value": "YOUR_API_KEY", "type": "default" }
+							{
+								"key": "x-api-key",
+								"value": "YOUR_API_KEY",
+								"type": "default"
+							}
 						]
 					}
 				},
@@ -693,10 +811,19 @@
 					"request": {
 						"url": "{{gateway_url}}/api/users",
 						"method": "POST",
-						"auth": { "type": "noauth" },
+						"auth": {
+							"type": "noauth"
+						},
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" },
-							{ "key": "x-api-key", "value": "YOUR_API_KEY", "type": "default" }
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "x-api-key",
+								"value": "YOUR_API_KEY",
+								"type": "default"
+							}
 						],
 						"body": {
 							"mode": "raw",

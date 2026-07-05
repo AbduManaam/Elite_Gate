@@ -141,6 +141,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		projectGroup := v1.Group("/projects/:projectId")
 		projectGroup.Use(middleware.ProjectScope(membershipRepo, projectRepo))
 		{
+			projectGroup.GET("/summary", middleware.RBAC(middleware.RoleViewer), projectHandler.GetSummary)
+
 			routes := projectGroup.Group("/routes")
 			{
 				routes.GET("", middleware.RBAC(middleware.RoleViewer), routeHandler.List)

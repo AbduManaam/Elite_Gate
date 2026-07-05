@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
@@ -13,12 +14,17 @@ import (
 )
 
 type ProjectHandler struct {
-	repo   *storage.ProjectRepo
-	logger zerolog.Logger
+	repo         *storage.ProjectRepo
+	logger       zerolog.Logger
+	summaryCache *storage.SummaryCache
 }
 
 func NewProjectHandler(repo *storage.ProjectRepo, logger zerolog.Logger) *ProjectHandler {
-	return &ProjectHandler{repo: repo, logger: logger}
+	return &ProjectHandler{
+		repo:         repo,
+		logger:       logger,
+		summaryCache: storage.NewSummaryCache(10 * time.Second),
+	}
 }
 
 type projectRequest struct {
@@ -168,3 +174,80 @@ func (h *ProjectHandler) Delete(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "project deleted", "id": id})
 }
+
+// GetSummary handles GET /admin/v1/projects/:projectId/summary.
+// Available to any project member — viewer, editor, or owner.
+// Gates Billing/Subscription & License fields to Owner role only.
+func (h *ProjectHandler) GetSummary(c *gin.Context) {
+	tcVal, exists := c.Get("tenant_ctx")
+	if !exists {
+		h.logger.Warn().Msg("GetSummary: tenant context missing")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal context error"})
+		return
+	}
+	tc := tcVal.(storage.TenantContext)
+	projectID := tc.ProjectID.String()
+
+	h.logger.Debug().
+		Str("project_id", projectID).
+		Str("user_id", tc.UserID.String()).
+		Str("role", tc.UserRole).
+		Msg("GetSummary: request received")
+
+	if cached, ok := h.summaryCache.Get(projectID); ok {
+		h.logger.Debug().Str("project_id", projectID).Msg("GetSummary: served from cache")
+		
+		// Clone cached summary before modifying role-based fields to prevent cache pollution
+		cloned := *cached
+		h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
+		
+		c.JSON(http.StatusOK, cloned)
+		return
+	}
+
+	summary, err := h.repo.GetSummary(c.Request.Context())
+	if err != nil {
+		if errors.Is(err, storage.ErrProjectNotFound) {
+			h.logger.Warn().Str("project_id", projectID).Msg("GetSummary: project not found")
+			c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+			return
+		}
+		h.logger.Error().Err(err).Str("project_id", projectID).Msg("GetSummary: failed to fetch summary")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get project summary"})
+		return
+	}
+
+	h.summaryCache.Set(projectID, summary)
+
+	// Apply role-based visibility to a copy so we don't store nullified fields in the shared cache
+	cloned := *summary
+	h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
+
+	h.logger.Info().
+		Str("project_id", projectID).
+		Str("user_id", tc.UserID.String()).
+		Msg("GetSummary: summary served successfully")
+
+	c.JSON(http.StatusOK, cloned)
+}
+
+// Helper to filter out billing/usage/subscription/licensing fields based on role.
+func (h *ProjectHandler) applyRoleBasedFields(summary *model.ProjectSummary, role string, projectID string) {
+	if role == "owner" {
+		status := "active"
+		if !summary.IsActive {
+			status = "suspended"
+		}
+		
+		// Owner has access to Subscription details & Billing/Plan details
+		summary.Subscription = &model.Subscription{
+			Plan:   *summary.Plan,
+			Status: status,
+		}
+	} else {
+		// Viewer and Editor are strictly restricted from seeing Billing / Usage, Subscription / License details.
+		summary.Plan = nil
+		summary.Subscription = nil
+	}
+}
+
