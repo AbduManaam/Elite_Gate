@@ -11,6 +11,8 @@ server:
   drain_stale_after: "2m"
   grpc_gateway_port: ":50051"
   route_reload_interval: "10s"
+  allowed_origins:
+    - http://localhost:5173
 
 log:
   level: "debug"          # debug | info | warn | error

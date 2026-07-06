@@ -23,8 +23,12 @@ import (
 func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerMgr container.ContainerManager) (http.Handler, error) {
 	gin.SetMode(gin.ReleaseMode)
 
+	projectRepo := storage.NewProjectRepo(db, logger)
+	originCache := middleware.NewOriginCache(projectRepo, 30*time.Second)
+
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(middleware.DynamicCORS(cfg.Server.AllowedOrigins, originCache))
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -55,7 +59,6 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
 	upstreamTargetRepo := storage.NewUpstreamTargetRepo(db, logger)
 	policyRepo := storage.NewPolicyRepo(db)
-	projectRepo := storage.NewProjectRepo(db, logger)
 	apiKeyRepo := storage.NewApiKeyRepo(db)
 	auditLogRepo := storage.NewAuditLogRepo(db, logger)
 	gatewayRepo := storage.NewGatewayRepo(db)
@@ -65,7 +68,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger)
 	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamTargetRepo, logger)
 	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger)
-	projectHandler := handler.NewProjectHandler(projectRepo, logger)
+	projectHandler := handler.NewProjectHandler(projectRepo, originCache, logger)
 	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
 	drainTimeout, err := time.ParseDuration(cfg.Server.DrainTimeout)
@@ -142,6 +145,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		projectGroup.Use(middleware.ProjectScope(membershipRepo, projectRepo))
 		{
 			projectGroup.GET("/summary", middleware.RBAC(middleware.RoleViewer), projectHandler.GetSummary)
+			projectGroup.PUT("/dashboard-origins", middleware.RBAC(middleware.RoleOwner), projectHandler.UpdateDashboardOrigins)
 
 			routes := projectGroup.Group("/routes")
 			{

@@ -36,6 +36,7 @@ type ServerConfig struct {
 	DevHostMap          map[string]string `mapstructure:"dev_host_map"`
 	AdminIPAllowlist    []string          `mapstructure:"admin_ip_allowlist"`
 	TrustProxy          bool              `mapstructure:"trust_proxy"`
+	AllowedOrigins      []string          `mapstructure:"allowed_origins"`
 }
 
 type DatabaseConfig struct {
@@ -139,6 +140,15 @@ func LoadConfig() (*Config, error) {
 		cfg.Server.DevHostMap = parseHostMap(hostMapRaw)
 	}
 
+	// ALLOWED_ORIGINS env var, if set, fully replaces whatever config.yaml has.
+	// Placed after Unmarshal since AllowedOrigins isn't a registered viper key.
+	if allowedOriginsRaw := os.Getenv("ALLOWED_ORIGINS"); allowedOriginsRaw != "" {
+		cfg.Server.AllowedOrigins = strings.Split(allowedOriginsRaw, ",")
+		for i, v := range cfg.Server.AllowedOrigins {
+			cfg.Server.AllowedOrigins[i] = strings.TrimSpace(v)
+		}
+	}
+
 	// 5. Validation Check
 	if cfg.Database.DSN == "" {
 		return nil, errors.New("database connection DSN (POSTGRES_DSN) is required")
@@ -148,6 +158,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.RateLimit.RequestsPerMinute <= 0 {
 		return nil, errors.New("rate_limit.requests_per_minute must be > 0")
+	}
+	if len(cfg.Server.AllowedOrigins) == 0 {
+		return nil, errors.New("server.allowed_origins must have at least one entry")
 	}
 	if err := validateDuration("server.read_timeout", cfg.Server.ReadTimeout); err != nil {
 		return nil, err

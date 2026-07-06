@@ -15,6 +15,7 @@ import (
 var (
 	ErrProjectNotFound = errors.New("project not found")
 	ErrSlugConflict    = errors.New("slug already exists")
+	ErrTooManyOrigins  = errors.New("dashboard origins: max 10 entries")
 )
 
 type ProjectRepo struct {
@@ -456,5 +457,39 @@ func (r *ProjectRepo) GetSummary(ctx context.Context) (*model.ProjectSummary, er
 	summary.Metrics = metrics
 
 	return &summary, nil
+}
+
+// GetDashboardOrigins returns the configured origins for a project.
+// Called from CORS middleware — must stay fast.
+func (r *ProjectRepo) GetDashboardOrigins(ctx context.Context, projectID string) ([]string, error) {
+	var origins []string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT dashboard_allowed_origins FROM projects WHERE id = $1 AND deleted_at IS NULL`,
+		projectID,
+	).Scan(pq.Array(&origins))
+	if err != nil {
+		return nil, err
+	}
+	return origins, nil
+}
+
+// UpdateDashboardOrigins replaces a project's allowed dashboard origins wholesale.
+func (r *ProjectRepo) UpdateDashboardOrigins(ctx context.Context, projectID string, origins []string) error {
+	if len(origins) > 10 {
+		return ErrTooManyOrigins
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE projects SET dashboard_allowed_origins = $1, updated_at = NOW()
+         WHERE id = $2 AND deleted_at IS NULL`,
+		pq.Array(origins), projectID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 

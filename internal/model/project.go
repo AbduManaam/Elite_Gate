@@ -9,7 +9,8 @@ type Project struct {
 	Description string    `json:"description"`
 	OwnerID     string    `json:"owner_id"`
 	IsActive    bool      `json:"is_active"`
-	Plan        string    `json:"plan"` //The subscription tier or service level of the project.
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Plan                    string    `json:"plan"` //The subscription tier or service level of the project.
+	DashboardAllowedOrigins []string  `json:"dashboard_allowed_origins"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }

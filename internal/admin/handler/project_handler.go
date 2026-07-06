@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"elitegate/internal/admin/middleware"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
@@ -15,13 +16,15 @@ import (
 
 type ProjectHandler struct {
 	repo         *storage.ProjectRepo
+	originCache  *middleware.OriginCache // Shared cache instance
 	logger       zerolog.Logger
 	summaryCache *storage.SummaryCache
 }
 
-func NewProjectHandler(repo *storage.ProjectRepo, logger zerolog.Logger) *ProjectHandler {
+func NewProjectHandler(repo *storage.ProjectRepo, originCache *middleware.OriginCache, logger zerolog.Logger) *ProjectHandler {
 	return &ProjectHandler{
 		repo:         repo,
+		originCache:  originCache,
 		logger:       logger,
 		summaryCache: storage.NewSummaryCache(10 * time.Second),
 	}
@@ -249,5 +252,41 @@ func (h *ProjectHandler) applyRoleBasedFields(summary *model.ProjectSummary, rol
 		summary.Plan = nil
 		summary.Subscription = nil
 	}
+}
+
+type dashboardOriginsRequest struct {
+	Origins []string `json:"origins" binding:"required"`
+}
+
+// UpdateDashboardOrigins handles PUT /admin/v1/projects/:projectId/dashboard-origins
+func (h *ProjectHandler) UpdateDashboardOrigins(c *gin.Context) {
+	var req dashboardOriginsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	for _, o := range req.Origins {
+		if err := validateOrigin(o); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	projectID := c.Param("projectId")
+	if err := h.repo.UpdateDashboardOrigins(c.Request.Context(), projectID, req.Origins); err != nil {
+		if errors.Is(err, storage.ErrTooManyOrigins) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		h.logger.Error().Err(err).Str("project_id", projectID).Msg("failed to update dashboard origins")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update dashboard origins"})
+		return
+	}
+
+	if h.originCache != nil {
+		h.originCache.Invalidate(projectID)
+	}
+	c.JSON(http.StatusOK, gin.H{"origins": req.Origins})
 }
 
