@@ -130,7 +130,7 @@ func (h *SyncHandler) ReloadProject(c *gin.Context) {
 	}
 	tc := tcVal.(storage.TenantContext)
 
-	gateways, err := h.gatewayRepo.ListByProject(c.Request.Context(), tc.ProjectID.String())
+	gateways, _, err := h.gatewayRepo.ListByProject(c.Request.Context(), tc.ProjectID.String(), 0, 0)
 	if err != nil {
 		h.logger.Error().Err(err).Str("project_id", tc.ProjectID.String()).Msg("failed to list gateways for project")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve project gateways"})

@@ -294,10 +294,11 @@ func (r *GatewayRepo) GetByExternalID(ctx context.Context, externalID string) (*
 }
 
 // ListByProject returns all gateways for the current tenant's project.
-func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string) ([]GatewayRecord, error) {
+func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string, limit, offset int) ([]GatewayRecord, int, error) {
 	r.logger.Debug().Str("project_id", projectID).Msg("ListByProject: listing gateways for project")
 
 	var gateways []GatewayRecord
+	var total int
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
 		tc, err := TenantFromContext(ctx)
@@ -305,13 +306,22 @@ func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string) ([]Ga
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM gateways WHERE project_id = $1 AND deleted_at IS NULL", tc.ProjectID).Scan(&total)
+		if err != nil {
+			return fmt.Errorf("count gateways: %w", err)
+		}
+
+		q := `
 			SELECT id, project_id::text, external_id, endpoint_ip, gateway_port, plan, status
 			FROM   gateways
 			WHERE  project_id = $1
 			  AND  deleted_at IS NULL
 			ORDER BY created_at ASC
 		`
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
+
 		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
 			return fmt.Errorf("query gateways: %w", err)
@@ -328,24 +338,34 @@ func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string) ([]Ga
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list gateways: %w", err)
+		return nil, 0, fmt.Errorf("list gateways: %w", err)
 	}
 
 	if gateways == nil {
 		gateways = []GatewayRecord{}
 	}
 
-	return gateways, nil
+	return gateways, total, nil
 }
 
-// ListAllForAdmin returns all non-deleted, active gateways belonging to projects
-// where the specified admin user is a member.
-// This method bypasses session-scoped RLS by executing directly on r.db, and enforces
-// security by explicitly joining with the project_members table on the admin's user ID.
-func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string) ([]GatewayRecord, error) {
+func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string, limit, offset int) ([]GatewayRecord, int, error) {
 	r.logger.Debug().Str("admin_user_id", adminUserID).Msg("ListAllForAdmin: querying gateways for admin")
 
-	const q = `
+	var total int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM   gateways g
+		JOIN   project_members pm ON g.project_id = pm.project_id
+		JOIN   projects p ON g.project_id = p.id
+		WHERE  pm.admin_user_id = $1
+		  AND  g.status         = 'active'
+		  AND  g.deleted_at     IS NULL
+		  AND  p.deleted_at     IS NULL`, adminUserID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count gateways for admin: %w", err)
+	}
+
+	q := `
 		SELECT g.id, g.project_id::text, g.external_id, g.endpoint_ip, g.gateway_port, g.plan, g.status
 		FROM   gateways g
 		JOIN   project_members pm ON g.project_id = pm.project_id
@@ -356,9 +376,13 @@ func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string) (
 		  AND  p.deleted_at     IS NULL
 		ORDER BY g.created_at ASC
 	`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
+
 	rows, err := r.db.QueryContext(ctx, q, adminUserID)
 	if err != nil {
-		return nil, fmt.Errorf("ListAllForAdmin query: %w", err)
+		return nil, 0, fmt.Errorf("ListAllForAdmin query: %w", err)
 	}
 	defer rows.Close()
 
@@ -366,20 +390,20 @@ func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string) (
 	for rows.Next() {
 		var g GatewayRecord
 		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.Plan, &g.Status); err != nil {
-			return nil, fmt.Errorf("scan gateway row: %w", err)
+			return nil, 0, fmt.Errorf("scan gateway row: %w", err)
 		}
 		gateways = append(gateways, g)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate gateway rows: %w", err)
+		return nil, 0, fmt.Errorf("iterate gateway rows: %w", err)
 	}
 
 	if gateways == nil {
 		gateways = []GatewayRecord{}
 	}
 
-	return gateways, nil
+	return gateways, total, nil
 }
 
 // MarkDraining transitions a gateway to "draining" and returns the

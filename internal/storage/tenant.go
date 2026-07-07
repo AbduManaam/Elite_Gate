@@ -321,8 +321,19 @@ func (r *MembershipRepo) RemoveMember(ctx context.Context, projectID, memberID u
 	return nil
 }
 
-func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID) ([]ProjectMember, error) {
-	const q = `
+func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID, limit, offset int) ([]ProjectMember, int, error) {
+	var total int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM   project_members pm
+		JOIN   admin_users      au ON au.id = pm.admin_user_id
+		WHERE  pm.project_id = $1
+		  AND  au.deleted_at IS NULL`, projectID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count members query: %w", err)
+	}
+
+	q := `
 		SELECT pm.project_id, pm.admin_user_id, au.username, au.email, pm.role, pm.joined_at
 		FROM   project_members pm
 		JOIN   admin_users      au ON au.id = pm.admin_user_id
@@ -330,9 +341,13 @@ func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID) (
 		  AND  au.deleted_at IS NULL
 		ORDER BY pm.joined_at ASC
 	`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
+
 	rows, err := r.db.QueryContext(ctx, q, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("list members query: %w", err)
+		return nil, 0, fmt.Errorf("list members query: %w", err)
 	}
 	defer rows.Close()
 
@@ -340,11 +355,11 @@ func (r *MembershipRepo) ListMembers(ctx context.Context, projectID uuid.UUID) (
 	for rows.Next() {
 		var m ProjectMember
 		if err := rows.Scan(&m.ProjectID, &m.AdminUserID, &m.Username, &m.Email, &m.Role, &m.JoinedAt); err != nil {
-			return nil, fmt.Errorf("scan member: %w", err)
+			return nil, 0, fmt.Errorf("scan member: %w", err)
 		}
 		members = append(members, m)
 	}
-	return members, nil
+	return members, total, nil
 }
 
 type MemberLookupResult struct {

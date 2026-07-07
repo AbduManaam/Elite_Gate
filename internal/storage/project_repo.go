@@ -85,10 +85,21 @@ func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 }
 
 // List all projects for a user.
-func (r *ProjectRepo) ListForUser(ctx context.Context, userID string) ([]model.Project, error) {
+func (r *ProjectRepo) ListForUser(ctx context.Context, userID string, limit, offset int) ([]model.Project, int, error) {
 	r.logger.Debug().Str("user_id", userID).Msg("ListForUser: fetching user projects")
 
-	const q = `
+	var total int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM projects p
+		JOIN project_members pm ON pm.project_id = p.id
+		WHERE pm.admin_user_id = $1
+		  AND p.deleted_at IS NULL`, userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user projects: %w", err)
+	}
+
+	q := `
 		SELECT
 			p.id,
 			p.name,
@@ -105,16 +116,17 @@ func (r *ProjectRepo) ListForUser(ctx context.Context, userID string) ([]model.P
 		  AND p.deleted_at IS NULL
 		ORDER BY p.name ASC
 	`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
+
 	rows, err := r.db.QueryContext(ctx, q, userID)
 	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
+		return nil, 0, fmt.Errorf("list projects: %w", err)
 	}
-	defer rows.Close() //ensures the database cursor is always closed when the function finishes, preventing connection leaks that can crash your application.
+	defer rows.Close()
 
-	// Initialise as empty slice so JSON returns [] not null
 	projects := make([]model.Project, 0)
-
-	//This is the process of taking all the project records fetched from the database table and converting them into individual Go objects (structs) one by one.
 	for rows.Next() {
 		var p model.Project
 		if err := rows.Scan(
@@ -122,18 +134,17 @@ func (r *ProjectRepo) ListForUser(ctx context.Context, userID string) ([]model.P
 			&p.OwnerID, &p.IsActive, &p.Plan,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan project row: %w", err)
+			return nil, 0, fmt.Errorf("scan project row: %w", err)
 		}
 		projects = append(projects, p)
 	}
 
-	// Check for errors that occurred during iteration
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate project rows: %w", err)
+		return nil, 0, fmt.Errorf("iterate project rows: %w", err)
 	}
 
 	r.logger.Debug().Str("user_id", userID).Int("count", len(projects)).Msg("ListForUser: user projects fetched successfully")
-	return projects, nil
+	return projects, total, nil
 }
 
 // Update a project's details.
@@ -174,10 +185,16 @@ func (r *ProjectRepo) Update(ctx context.Context, id string, p *model.Project) e
 //
 // Platform-operator use only. Callers MUST be gated by SuperAdminOnly
 // middleware before this method is ever reachable.
-func (r *ProjectRepo) ListAllGlobal(ctx context.Context) ([]model.Project, error) {
+func (r *ProjectRepo) ListAllGlobal(ctx context.Context, limit, offset int) ([]model.Project, int, error) {
 	r.logger.Debug().Msg("ListAllGlobal: querying all projects platform-wide")
 
-	const q = `
+	var total int
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL").Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count global projects: %w", err)
+	}
+
+	q := `
 		SELECT
 			id, name, slug, COALESCE(description, ''),
 			owner_id, is_active, plan, created_at, updated_at
@@ -185,9 +202,13 @@ func (r *ProjectRepo) ListAllGlobal(ctx context.Context) ([]model.Project, error
 		WHERE deleted_at IS NULL
 		ORDER BY created_at DESC
 	`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
+
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("list all projects: %w", err)
+		return nil, 0, fmt.Errorf("list all projects: %w", err)
 	}
 	defer rows.Close()
 
@@ -199,16 +220,16 @@ func (r *ProjectRepo) ListAllGlobal(ctx context.Context) ([]model.Project, error
 			&p.OwnerID, &p.IsActive, &p.Plan,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan project row: %w", err)
+			return nil, 0, fmt.Errorf("scan project row: %w", err)
 		}
 		projects = append(projects, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate project rows: %w", err)
+		return nil, 0, fmt.Errorf("iterate project rows: %w", err)
 	}
 
 	r.logger.Debug().Int("count", len(projects)).Msg("ListAllGlobal: projects fetched successfully")
-	return projects, nil
+	return projects, total, nil
 }
 
 // Soft-delete a project, API keys, and routes.

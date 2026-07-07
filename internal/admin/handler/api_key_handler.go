@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"elitegate/internal/admin/service"
+	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -145,17 +147,24 @@ func (h *ApiKeyHandler) Revoke(c *gin.Context) {
 }
 
 func (h *ApiKeyHandler) List(c *gin.Context) {
-	h.logger.Info().Msg("listing all API keys for project")
-
-	keys, err := h.repo.ListAll(c.Request.Context())
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
 	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to list API keys from database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"api_keys": keys,
+	h.logger.Info().Msg("listing all API keys for project")
+
+	keys, total, err := h.repo.ListAll(c.Request.Context(), limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list API keys from database")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list API keys"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[storage.ApiKeyRecord]{
+		Items:      keys,
+		Pagination: service.BuildPagination(page, limit, total),
 	})
 }
 

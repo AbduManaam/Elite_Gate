@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 )
@@ -30,27 +31,24 @@ func NewUpstreamHandler(
 }
 
 func (h *UpstreamHandler) List(c *gin.Context) {
-	h.logger.Info().
-		Msg("listing upstreams")
-
-	upstreams, err := h.repo.ListAll(c.Request.Context())
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
 	if err != nil {
-		h.logger.Error().
-			Err(err).
-			Msg("failed to list upstreams")
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "internal server error",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.logger.Info().
-		Int("count", len(upstreams)).
-		Msg("upstreams loaded")
+	h.logger.Info().Int("page", page).Int("limit", limit).Msg("listing upstreams")
 
-	c.JSON(http.StatusOK, gin.H{
-		"upstreams": upstreams,
+	upstreams, total, err := h.repo.ListAll(c.Request.Context(), limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list upstreams")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load upstreams"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[model.Upstream]{
+		Items:      upstreams,
+		Pagination: service.BuildPagination(page, limit, total),
 	})
 }
 

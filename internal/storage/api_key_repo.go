@@ -302,10 +302,11 @@ func (r *ApiKeyRepo) GetByID(ctx context.Context, keyID string) (*ApiKeyRecord, 
 
 // List all active API keys for the current tenant.
 // Returns an empty slice if none exist.
-func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
+func (r *ApiKeyRepo) ListAll(ctx context.Context, limit, offset int) ([]ApiKeyRecord, int, error) {
 	r.logger.Debug().Msg("ListAll: listing api_keys for tenant")
 
 	var keys []ApiKeyRecord
+	var total int
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
 		tc, err := TenantFromContext(ctx)
@@ -313,7 +314,12 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM api_keys WHERE project_id = $1 AND deleted_at IS NULL", tc.ProjectID).Scan(&total)
+		if err != nil {
+			return fmt.Errorf("count api keys: %w", err)
+		}
+
+		q := `
 			SELECT id, project_id::text, name, key_hash, status,
 			       roles, scopes, expires_at, created_at, updated_at
 			FROM   api_keys
@@ -321,6 +327,10 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 			  AND  deleted_at IS NULL
 			ORDER BY created_at DESC
 		`
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
+
 		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
 			return fmt.Errorf("query api_keys: %w", err)
@@ -341,16 +351,15 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context) ([]ApiKeyRecord, error) {
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("api_key list: %w", err)
+		return nil, 0, fmt.Errorf("api_key list: %w", err)
 	}
 
-	// Always return an empty slice rather than nil so JSON encodes as [].
 	if keys == nil {
 		keys = []ApiKeyRecord{}
 	}
 
 	r.logger.Debug().Int("count", len(keys)).Msg("ListAll: api_keys listed successfully")
-	return keys, nil
+	return keys, total, nil
 }
 
 // Global API key lookup (bypasses tenant RLS)─────────────────────────────────────────

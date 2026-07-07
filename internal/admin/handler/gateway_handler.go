@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"elitegate/internal/admin/middleware"
+	"elitegate/internal/admin/service"
 	"elitegate/internal/container"
+	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -248,45 +251,63 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 // List handles GET /admin/v1/projects/:projectId/gateways
 func (h *GatewayHandler) List(c *gin.Context) {
 	projectID := c.Param("projectId")
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "projectId is required"})
+	if _, err := uuid.Parse(projectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project ID"})
+		return
+	}
+
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	h.logger.Info().Str("project_id", projectID).Msg("listing gateways for project")
 
-	gateways, err := h.repo.ListByProject(c.Request.Context(), projectID)
+	gateways, total, err := h.repo.ListByProject(c.Request.Context(), projectID, limit, offset)
 	if err != nil {
 		h.logger.Error().Err(err).Str("project_id", projectID).Msg("failed to list gateways from database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gateways"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"gateways": gateways,
+	c.JSON(http.StatusOK, model.PaginatedResponse[storage.GatewayRecord]{
+		Items:      gateways,
+		Pagination: service.BuildPagination(page, limit, total),
 	})
 }
 
 // ListAllForAdmin handles GET /admin/v1/gateways
 // Returns all active gateways across all projects where the authenticated admin has membership.
 func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
-	adminUserIDVal, exists := c.Get("admin_user_id")
+	adminUserIDVal, exists := c.Get(middleware.AdminUserIDKey)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
 		return
 	}
-	adminUserID := adminUserIDVal.(string)
-
-	gateways, err := h.repo.ListAllForAdmin(c.Request.Context(), adminUserID)
-	if err != nil {
-		h.logger.Error().
-			Err(err).
-			Str("admin_user_id", adminUserID).
-			Msg("failed to list gateways for admin")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	adminUserID, ok := adminUserIDVal.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid session state"})
 		return
 	}
 
-	// TODO: Add pagination support if gateway count grows significantly.
-	c.JSON(http.StatusOK, gin.H{"gateways": gateways})
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.logger.Info().Str("admin_user_id", adminUserID).Msg("listing gateways for admin")
+
+	gateways, total, err := h.repo.ListAllForAdmin(c.Request.Context(), adminUserID, limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Str("admin_user_id", adminUserID).Msg("failed to list gateways for admin")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gateways"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[storage.GatewayRecord]{
+		Items:      gateways,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }

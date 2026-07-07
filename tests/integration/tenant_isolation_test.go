@@ -127,7 +127,7 @@ func TestTenantIsolation(t *testing.T) {
 	}()
 
 	// 5. Query the routes using TenantContext B (should NOT return routeA)
-	routesB, err := routeRepo.ListAll(tenantCtxB)
+	routesB, _, err := routeRepo.ListAll(tenantCtxB, 0, 0)
 	if err != nil {
 		t.Fatalf("ListAll with tenant ctx B failed: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestTenantIsolation(t *testing.T) {
 	}
 
 	// 6. Query the routes using TenantContext A (should return routeA)
-	routesA, err := routeRepo.ListAll(tenantCtxA)
+	routesA, _, err := routeRepo.ListAll(tenantCtxA, 0, 0)
 	if err != nil {
 		t.Fatalf("ListAll with tenant ctx A failed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestTenantIsolation(t *testing.T) {
 	}()
 
 	// Query gateways using TenantContext B (should NOT return gw_test_alpha_rls)
-	gatewaysB, err := gatewayRepo.ListByProject(tenantCtxB, projectB.String())
+	gatewaysB, _, err := gatewayRepo.ListByProject(tenantCtxB, projectB.String(), 0, 0)
 	if err != nil {
 		t.Fatalf("ListByProject with tenant ctx B failed: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestTenantIsolation(t *testing.T) {
 	}
 
 	// Query gateways using TenantContext A (should return gw_test_alpha_rls)
-	gatewaysA, err := gatewayRepo.ListByProject(tenantCtxA, projectA.String())
+	gatewaysA, _, err := gatewayRepo.ListByProject(tenantCtxA, projectA.String(), 0, 0)
 	if err != nil {
 		t.Fatalf("ListByProject with tenant ctx A failed: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestGatewayListAllForAdmin(t *testing.T) {
 	gatewayRepo := storage.NewGatewayRepo(db)
 
 	// Query gateways for Admin A (should return gw_test_alpha_all, NOT gw_test_beta_all)
-	gatewaysA, err := gatewayRepo.ListAllForAdmin(ctx, userA.String())
+	gatewaysA, _, err := gatewayRepo.ListAllForAdmin(ctx, userA.String(), 0, 0)
 	if err != nil {
 		t.Fatalf("ListAllForAdmin for user A failed: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestGatewayListAllForAdmin(t *testing.T) {
 	}
 
 	// Query gateways for Admin B (should return gw_test_beta_all, NOT gw_test_alpha_all)
-	gatewaysB, err := gatewayRepo.ListAllForAdmin(ctx, userB.String())
+	gatewaysB, _, err := gatewayRepo.ListAllForAdmin(ctx, userB.String(), 0, 0)
 	if err != nil {
 		t.Fatalf("ListAllForAdmin for user B failed: %v", err)
 	}

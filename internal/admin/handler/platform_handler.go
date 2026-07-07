@@ -10,7 +10,9 @@ import (
 	"time"
 
 	adminmw "elitegate/internal/admin/middleware"
+	"elitegate/internal/admin/service"
 	"elitegate/internal/container"
+	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -67,21 +69,25 @@ func actingAdminID(c *gin.Context) string {
 
 // ListTenants handles GET /admin/v1/platform/projects
 func (h *PlatformHandler) ListTenants(c *gin.Context) {
-	projects, err := h.projectRepo.ListAllGlobal(c.Request.Context())
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
 	if err != nil {
-		h.logger.Error().Err(err).
-			Str("acting_admin_id", actingAdminID(c)).
-			Msg("failed to list all tenants")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	projects, total, err := h.projectRepo.ListAllGlobal(c.Request.Context(), limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list all tenants")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list tenants"})
 		return
 	}
 
-	h.logger.Debug().
-		Str("acting_admin_id", actingAdminID(c)).
-		Int("count", len(projects)).
-		Msg("platform-wide tenant list fetched")
+	h.logger.Info().Int("count", len(projects)).Msg("platform-wide tenant list fetched")
 
-	c.JSON(http.StatusOK, gin.H{"projects": projects, "count": len(projects)})
+	c.JSON(http.StatusOK, model.PaginatedResponse[model.Project]{
+		Items:      projects,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

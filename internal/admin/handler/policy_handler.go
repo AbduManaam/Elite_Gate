@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 )
@@ -65,14 +66,23 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 }
 
 func (h *PolicyHandler) List(c *gin.Context) {
-	policies, err := h.policyRepo.ListAll(c.Request.Context())
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
 	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to list policies")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"policies": policies})
+	policies, total, err := h.policyRepo.ListAll(c.Request.Context(), limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list policies")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load policies"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[model.Policy]{
+		Items:      policies,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }
 
 func (h *PolicyHandler) Delete(c *gin.Context) {

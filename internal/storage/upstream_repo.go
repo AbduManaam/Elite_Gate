@@ -165,8 +165,9 @@ func (r *UpstreamRepo) ListAllEnabledGlobal(ctx context.Context) ([]model.Upstre
 	return upstreams, nil
 }
 
-func (r *UpstreamRepo) ListAll(ctx context.Context) ([]model.Upstream, error) {
+func (r *UpstreamRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Upstream, int, error) {
 	var upstreams []model.Upstream
+	var total int
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
 		tc, err := TenantFromContext(ctx)
@@ -174,7 +175,12 @@ func (r *UpstreamRepo) ListAll(ctx context.Context) ([]model.Upstream, error) {
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
-		const q = `
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM upstreams WHERE project_id = $1 AND deleted_at IS NULL", tc.ProjectID).Scan(&total)
+		if err != nil {
+			return fmt.Errorf("count upstreams: %w", err)
+		}
+
+		const baseQ = `
 			SELECT id, project_id, name, target_url, protocol,
 			       COALESCE(health_path, ''),
 			       enabled, created_at, updated_at
@@ -183,17 +189,19 @@ func (r *UpstreamRepo) ListAll(ctx context.Context) ([]model.Upstream, error) {
 			  AND deleted_at IS NULL
 			ORDER BY name ASC
 		`
+		q := baseQ
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
 
 		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
-			return fmt.Errorf("query upstreams for project %s: %w",
-				tc.ProjectID, err)
+			return fmt.Errorf("query upstreams for project %s: %w", tc.ProjectID, err)
 		}
 		defer rows.Close()
 
 		for rows.Next() {
 			var u model.Upstream
-
 			if err := rows.Scan(
 				&u.ID,
 				&u.ProjectID,
@@ -207,22 +215,15 @@ func (r *UpstreamRepo) ListAll(ctx context.Context) ([]model.Upstream, error) {
 			); err != nil {
 				return fmt.Errorf("scan upstream row: %w", err)
 			}
-
 			upstreams = append(upstreams, u)
 		}
-
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate upstream rows: %w", err)
-		}
-
-		return nil
+		return rows.Err()
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("ListAll: %w", err)
+		return nil, 0, err
 	}
-
-	return upstreams, nil
+	return upstreams, total, nil
 }
 
 func (r *UpstreamRepo) Update(ctx context.Context, id string, u *model.Upstream) error {

@@ -43,8 +43,9 @@ func NewPolicyRepo(db *sql.DB) *PolicyRepo {
 	return &PolicyRepo{BaseRepo{db: db}}
 }
 
-func (r *PolicyRepo) ListAll(ctx context.Context) ([]model.Policy, error) {
+func (r *PolicyRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Policy, int, error) {
 	var policies []model.Policy
+	var total int
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
 		tc, err := TenantFromContext(ctx)
@@ -52,11 +53,20 @@ func (r *PolicyRepo) ListAll(ctx context.Context) ([]model.Policy, error) {
 			return fmt.Errorf("get tenant context: %w", err)
 		}
 
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM policies WHERE project_id = $1 AND deleted_at IS NULL", tc.ProjectID).Scan(&total)
+		if err != nil {
+			return fmt.Errorf("count policies: %w", err)
+		}
+
 		q := fmt.Sprintf(`
 			SELECT %s
 			FROM policies
 			WHERE project_id = $1 AND deleted_at IS NULL
 			ORDER BY name ASC`, selectFields)
+
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
 
 		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
@@ -72,18 +82,14 @@ func (r *PolicyRepo) ListAll(ctx context.Context) ([]model.Policy, error) {
 			policies = append(policies, p)
 		}
 
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate policy rows: %w", err)
-		}
-
-		return nil
+		return rows.Err()
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return policies, nil
+	return policies, total, nil
 }
 
 func (r *PolicyRepo) GetByID(ctx context.Context, id string) (*model.Policy, error) {

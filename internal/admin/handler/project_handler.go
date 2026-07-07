@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"elitegate/internal/admin/middleware"
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
@@ -96,25 +97,35 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 
 // List handles GET /admin/v1/projects
 func (h *ProjectHandler) List(c *gin.Context) {
-	userIDVal, exists := c.Get("admin_user_id")
+	userIDVal, exists := c.Get(middleware.AdminUserIDKey)
 	if !exists {
 		h.logger.Warn().Msg("list projects: admin_user_id missing from context")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
 		return
 	}
-
-	userID := userIDVal.(string)
-
-	projects, err := h.repo.ListForUser(c.Request.Context(), userID)
-	if err != nil {
-		h.logger.Error().Err(err).
-			Str("user_id", userID).
-			Msg("failed to list projects")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch projects"})
+	userID, ok := userIDVal.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid session"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"projects": projects})
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	projects, total, err := h.repo.ListForUser(c.Request.Context(), userID, limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", userID).Msg("failed to list projects")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list projects"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[model.Project]{
+		Items:      projects,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }
 
 // Update handles PUT /admin/v1/projects/:projectId

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 	"errors"
@@ -24,13 +25,23 @@ func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger) *RouteHandl
 }
 
 func (h *RouteHandler) List(c *gin.Context) {
-	routes, err := h.repo.ListAll(c.Request.Context())
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	routes, total, err := h.repo.ListAll(c.Request.Context(), limit, offset)
 	if err != nil {
 		h.logger.Debug().Err(err).Str("handler", "ListRoutes").Msg("failed to list routes")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load routes"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"routes": routes})
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[model.Route]{
+		Items:      routes,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }
 
 // createRouteRequest is the API contract for creating or updating a route.
@@ -215,3 +226,29 @@ func (h *RouteHandler) Disable(c *gin.Context) {
 	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to disable route")
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
+
+func (h *RouteHandler) Enable(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "route id is required"})
+		return
+	}
+
+	h.logger.Info().Str("route_id", id).Msg("enabling route")
+
+	err := h.repo.Enable(c.Request.Context(), id)
+	if err == nil {
+		h.logger.Info().Str("route_id", id).Msg("route enabled successfully")
+		c.JSON(http.StatusOK, gin.H{"message": "route enabled", "id": id})
+		return
+	}
+
+	if errors.Is(err, storage.ErrRouteNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
+		return
+	}
+
+	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to enable route")
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+}
+

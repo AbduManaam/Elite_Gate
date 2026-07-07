@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"elitegate/internal/admin/service"
+	"elitegate/internal/model"
 	adminmw "elitegate/internal/admin/middleware"
 	"elitegate/internal/storage"
 
@@ -192,20 +194,28 @@ func (h *MembershipHandler) RemoveMember(c *gin.Context) {
 }
 
 func (h *MembershipHandler) List(c *gin.Context) {
-	projectID, err := uuid.Parse(c.Param("projectId"))
+	projectIDStr := c.Param("projectId")
+	projectID, err := uuid.Parse(projectIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project ID format"})
 		return
 	}
 
-	members, err := h.repo.ListMembers(c.Request.Context(), projectID)
+	page, limit, offset, err := service.ParsePaginationOffset(c.Query("page"), c.Query("limit"))
 	if err != nil {
-		h.logger.Error().Err(err).
-			Str("project_id", projectID.String()).
-			Msg("failed to list project members")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"members": members})
+	members, total, err := h.repo.ListMembers(c.Request.Context(), projectID, limit, offset)
+	if err != nil {
+		h.logger.Error().Err(err).Str("project_id", projectIDStr).Msg("failed to list project members")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load members"})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.PaginatedResponse[storage.ProjectMember]{
+		Items:      members,
+		Pagination: service.BuildPagination(page, limit, total),
+	})
 }

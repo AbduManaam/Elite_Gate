@@ -103,23 +103,42 @@ func (r *RouteRepo) GetByID(ctx context.Context, id string) (*model.Route, error
 
 	return &rt, nil
 }
-func (r *RouteRepo) ListAll(ctx context.Context) ([]model.Route, error) {
+func (r *RouteRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Route, int, error) {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
 		r.logger.Trace().Msg("ListAll: no tenant context, listing all routes globally")
+		var total int
+		err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM routes WHERE deleted_at IS NULL").Scan(&total)
+		if err != nil {
+			return nil, 0, err
+		}
+
 		q := listQuery + ` WHERE r.deleted_at IS NULL ORDER BY r.path ASC`
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
 		rows, err := r.db.QueryContext(ctx, q)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		defer rows.Close()
-		return scanRoutes(rows)
+		routes, err := scanRoutes(rows)
+		return routes, total, err
 	}
 
 	r.logger.Debug().Str("project_id", tc.ProjectID.String()).Msg("ListAll: tenant context found, listing isolated routes")
 	var routes []model.Route
+	var total int
 	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM routes WHERE deleted_at IS NULL").Scan(&total)
+		if err != nil {
+			return err
+		}
+
 		q := listQuery + ` WHERE r.deleted_at IS NULL ORDER BY r.path ASC`
+		if limit > 0 {
+			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
 		rows, err := tx.QueryContext(ctx, q)
 		if err != nil {
 			return err
@@ -129,9 +148,9 @@ func (r *RouteRepo) ListAll(ctx context.Context) ([]model.Route, error) {
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return routes, nil
+	return routes, total, nil
 }
 
 func (r *RouteRepo) Create(ctx context.Context, rt *model.Route) error {
@@ -315,6 +334,43 @@ func (r *RouteRepo) Disable(ctx context.Context, id string) error {
 	r.logger.Info().Str("route_id", id).Msg("Disable: route disabled successfully")
 	return nil
 }
+
+func (r *RouteRepo) Enable(ctx context.Context, id string) error {
+	r.logger.Info().Str("route_id", id).Msg("Enable: initiating route enabling")
+
+	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		const q = `
+			UPDATE routes
+			SET    enabled    = TRUE,
+			       updated_at = NOW()
+			WHERE  id = $1
+			  AND  project_id = $2
+			  AND  deleted_at IS NULL
+		`
+		res, err := tx.ExecContext(ctx, q, id, tc.ProjectID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrRouteNotFound
+		}
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	r.logger.Info().Str("route_id", id).Msg("Enable: route enabled successfully")
+	return nil
+}
+
 
 var (
 	ErrRouteNotFound     = errors.New("route not found")

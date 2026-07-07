@@ -153,6 +153,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				routes.POST("", middleware.RBAC(middleware.RoleEditor), routeHandler.Create)
 				routes.PUT("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Update)
 				routes.PATCH("/:id/disable", middleware.RBAC(middleware.RoleEditor), routeHandler.Disable)
+				routes.PATCH("/:id/enable", middleware.RBAC(middleware.RoleEditor), routeHandler.Enable)
 				routes.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), routeHandler.Delete)
 				routes.POST("/:id/policy", middleware.RBAC(middleware.RoleEditor), policyHandler.AssignPolicy)
 				routes.DELETE("/:id/policy", middleware.RBAC(middleware.RoleEditor), policyHandler.RemovePolicy)
