@@ -11,6 +11,7 @@ type Project struct {
 	IsActive    bool      `json:"is_active"`
 	Plan                    string    `json:"plan"` //The subscription tier or service level of the project.
 	DashboardAllowedOrigins []string  `json:"dashboard_allowed_origins"`
+	Role                    string    `json:"role,omitempty"`
 	CreatedAt               time.Time `json:"created_at"`
 	UpdatedAt               time.Time `json:"updated_at"`
 }

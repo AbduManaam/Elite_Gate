@@ -109,7 +109,8 @@ func (r *ProjectRepo) ListForUser(ctx context.Context, userID string, limit, off
 			p.is_active,
 			p.plan,
 			p.created_at,
-			p.updated_at
+			p.updated_at,
+			pm.role
 		FROM projects p
 		JOIN project_members pm ON pm.project_id = p.id
 		WHERE pm.admin_user_id = $1
@@ -132,7 +133,7 @@ func (r *ProjectRepo) ListForUser(ctx context.Context, userID string, limit, off
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Slug, &p.Description,
 			&p.OwnerID, &p.IsActive, &p.Plan,
-			&p.CreatedAt, &p.UpdatedAt,
+			&p.CreatedAt, &p.UpdatedAt, &p.Role,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan project row: %w", err)
 		}

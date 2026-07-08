@@ -214,6 +214,7 @@ func (h *ProjectHandler) GetSummary(c *gin.Context) {
 		// Clone cached summary before modifying role-based fields to prevent cache pollution
 		cloned := *cached
 		h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
+		cloned.Role = tc.UserRole
 		
 		c.JSON(http.StatusOK, cloned)
 		return
@@ -236,6 +237,7 @@ func (h *ProjectHandler) GetSummary(c *gin.Context) {
 	// Apply role-based visibility to a copy so we don't store nullified fields in the shared cache
 	cloned := *summary
 	h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
+	cloned.Role = tc.UserRole
 
 	h.logger.Info().
 		Str("project_id", projectID).

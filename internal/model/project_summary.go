@@ -19,6 +19,7 @@ type ProjectSummary struct {
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 	Metrics     ProjectSummaryMetrics `json:"metrics"`
+	Role        string                `json:"role,omitempty"`
 
 	// Subscription & Billing details — visible only to the Owner
 	Plan         *string       `json:"plan,omitempty"`
