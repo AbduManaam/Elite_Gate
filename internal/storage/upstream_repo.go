@@ -40,9 +40,10 @@ func (r *UpstreamRepo) Create(ctx context.Context, u *model.Upstream) error {
 				target_url,
 				protocol,
 				health_path,
+				lb_strategy,
 				enabled
 			)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			RETURNING id, created_at, updated_at
 		`
 
@@ -54,6 +55,7 @@ func (r *UpstreamRepo) Create(ctx context.Context, u *model.Upstream) error {
 			u.TargetURL,
 			u.Protocol,
 			u.HealthPath,
+			u.LBStrategy,
 			u.Enabled,
 		).Scan(
 			&u.ID,
@@ -89,6 +91,7 @@ func (r *UpstreamRepo) GetByID(ctx context.Context, id string) (*model.Upstream,
 		const q = `
 			SELECT id, project_id, name, target_url, protocol,
 			       COALESCE(health_path, ''),
+			       lb_strategy::text,
 			       enabled, created_at, updated_at
 			FROM upstreams
 			WHERE id = $1
@@ -103,6 +106,7 @@ func (r *UpstreamRepo) GetByID(ctx context.Context, id string) (*model.Upstream,
 			&u.TargetURL,
 			&u.Protocol,
 			&u.HealthPath,
+			&u.LBStrategy,
 			&u.Enabled,
 			&u.CreatedAt,
 			&u.UpdatedAt,
@@ -183,6 +187,7 @@ func (r *UpstreamRepo) ListAll(ctx context.Context, limit, offset int) ([]model.
 		const baseQ = `
 			SELECT id, project_id, name, target_url, protocol,
 			       COALESCE(health_path, ''),
+			       lb_strategy::text,
 			       enabled, created_at, updated_at
 			FROM upstreams
 			WHERE project_id = $1
@@ -209,6 +214,7 @@ func (r *UpstreamRepo) ListAll(ctx context.Context, limit, offset int) ([]model.
 				&u.TargetURL,
 				&u.Protocol,
 				&u.HealthPath,
+				&u.LBStrategy,
 				&u.Enabled,
 				&u.CreatedAt,
 				&u.UpdatedAt,
@@ -239,7 +245,8 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, u *model.Upstream)
 			       target_url  = $4,
 			       protocol    = $5,
 			       health_path = $6,
-			       enabled     = $7,
+			       lb_strategy = $7,
+			       enabled     = $8,
 			       updated_at  = NOW()
 			WHERE  id = $1
 			  AND  project_id = $2
@@ -250,7 +257,7 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, u *model.Upstream)
 		return tx.QueryRowContext(
 			ctx, q,
 			id, tc.ProjectID,
-			u.Name, u.TargetURL, u.Protocol, u.HealthPath, u.Enabled,
+			u.Name, u.TargetURL, u.Protocol, u.HealthPath, u.LBStrategy, u.Enabled,
 		).Scan(&u.ID, &u.ProjectID, &u.CreatedAt, &u.UpdatedAt)
 	})
 

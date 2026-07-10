@@ -60,6 +60,7 @@ type createUpstreamRequest struct {
 	Protocol   string `json:"protocol" binding:"required"`
 	HealthPath string `json:"health_path"`
 	Enabled    bool   `json:"enabled"`
+	LBStrategy string `json:"lb_strategy"`
 }
 
 func (h *UpstreamHandler) Create(c *gin.Context) {
@@ -98,12 +99,27 @@ func (h *UpstreamHandler) Create(c *gin.Context) {
 		return
 	}
 
+	lbStrategy := req.LBStrategy
+	if lbStrategy == "" {
+		lbStrategy = "round_robin"
+	}
+	if lbStrategy != "round_robin" && lbStrategy != "least_conn" {
+		h.logger.Warn().
+			Str("lb_strategy", lbStrategy).
+			Msg("invalid load balancer strategy")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "lb_strategy must be 'round_robin' or 'least_conn'",
+		})
+		return
+	}
+
 	u := &model.Upstream{
 		Name:       req.Name,
 		TargetURL:  req.TargetURL,
 		Protocol:   req.Protocol,
 		HealthPath: req.HealthPath,
 		Enabled:    req.Enabled,
+		LBStrategy: lbStrategy,
 	}
 
 	h.logger.Info().
@@ -147,6 +163,7 @@ type updateUpstreamRequest struct {
 	Protocol   string `json:"protocol" binding:"required"`
 	HealthPath string `json:"health_path"`
 	Enabled    bool   `json:"enabled"`
+	LBStrategy string `json:"lb_strategy"`
 }
 
 func (h *UpstreamHandler) Update(c *gin.Context) {
@@ -163,12 +180,22 @@ func (h *UpstreamHandler) Update(c *gin.Context) {
 		return
 	}
 
+	lbStrategy := req.LBStrategy
+	if lbStrategy == "" {
+		lbStrategy = "round_robin"
+	}
+	if lbStrategy != "round_robin" && lbStrategy != "least_conn" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lb_strategy must be 'round_robin' or 'least_conn'"})
+		return
+	}
+
 	u := &model.Upstream{
 		Name:       req.Name,
 		TargetURL:  req.TargetURL,
 		Protocol:   req.Protocol,
 		HealthPath: req.HealthPath,
 		Enabled:    req.Enabled,
+		LBStrategy: lbStrategy,
 	}
 
 	if err := h.repo.Update(c.Request.Context(), id, u); err != nil {
