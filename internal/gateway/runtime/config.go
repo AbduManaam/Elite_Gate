@@ -20,6 +20,7 @@ type Snapshot struct {
 // ├── user-service-pod-1
 // └── user-service-pod-2
 type UpstreamPool struct {
+	ProjectID  string
 	Targets    []loadbalancer.Target
 	Strategy   loadbalancer.Strategy
 	HealthPath string // health probe path for all targets in this pool (e.g. "/health")

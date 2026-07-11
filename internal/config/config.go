@@ -37,6 +37,8 @@ type ServerConfig struct {
 	AdminIPAllowlist    []string          `mapstructure:"admin_ip_allowlist"`
 	TrustProxy          bool              `mapstructure:"trust_proxy"`
 	AllowedOrigins      []string          `mapstructure:"allowed_origins"`
+	PrometheusURL       string            `mapstructure:"prometheus_url"`
+	MetricsCacheTTL     string            `mapstructure:"metrics_cache_ttl"`
 }
 
 type DatabaseConfig struct {
@@ -60,13 +62,13 @@ type RateLimitConfig struct {
 }
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Log       LogConfig       `mapstructure:"log"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	AppEnv    string          `mapstructure:"app_env"`
+	Server        ServerConfig    `mapstructure:"server"`
+	Log           LogConfig       `mapstructure:"log"`
+	Database      DatabaseConfig  `mapstructure:"database"`
+	Redis         RedisConfig     `mapstructure:"redis"`
+	Auth          AuthConfig      `mapstructure:"auth"`
+	RateLimit     RateLimitConfig `mapstructure:"rate_limit"`
+	AppEnv        string          `mapstructure:"app_env"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -78,6 +80,8 @@ func LoadConfig() (*Config, error) {
 
 	viper.SetDefault("server.port", ":8080")
 	viper.SetDefault("server.admin_api_url", "http://admin:9090")
+	viper.SetDefault("server.prometheus_url", "http://prometheus:9090")
+	viper.SetDefault("server.metrics_cache_ttl", "30s")
 	viper.SetDefault("database.max_open_conns", 25)
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("redis.addr", "redis:6379")
@@ -120,6 +124,8 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("app_env", "APP_ENV")
 	viper.BindEnv("server.project_id", "PROJECT_ID")
 	viper.BindEnv("server.trust_proxy", "TRUST_PROXY")
+	viper.BindEnv("server.prometheus_url", "PROMETHEUS_URL")
+	viper.BindEnv("server.metrics_cache_ttl", "METRICS_CACHE_TTL")
 
 	viper.AutomaticEnv()
 

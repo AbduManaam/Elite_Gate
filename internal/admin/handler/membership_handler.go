@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/http"
 
+	adminmw "elitegate/internal/admin/middleware"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
-	adminmw "elitegate/internal/admin/middleware"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"

@@ -210,12 +210,12 @@ func (h *ProjectHandler) GetSummary(c *gin.Context) {
 
 	if cached, ok := h.summaryCache.Get(projectID); ok {
 		h.logger.Debug().Str("project_id", projectID).Msg("GetSummary: served from cache")
-		
+
 		// Clone cached summary before modifying role-based fields to prevent cache pollution
 		cloned := *cached
 		h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
 		cloned.Role = tc.UserRole
-		
+
 		c.JSON(http.StatusOK, cloned)
 		return
 	}
@@ -254,7 +254,7 @@ func (h *ProjectHandler) applyRoleBasedFields(summary *model.ProjectSummary, rol
 		if !summary.IsActive {
 			status = "suspended"
 		}
-		
+
 		// Owner has access to Subscription details & Billing/Plan details
 		summary.Subscription = &model.Subscription{
 			Plan:   *summary.Plan,
@@ -302,4 +302,3 @@ func (h *ProjectHandler) UpdateDashboardOrigins(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"origins": req.Origins})
 }
-

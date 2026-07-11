@@ -8,7 +8,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog"
+)
+
+var UpstreamHealthGauge = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "gateway_upstream_health_status",
+		Help: "Upstream health as seen by the gateway's own health checker (1=healthy, 0=unhealthy)",
+	},
+	[]string{"project_id", "upstream"},
 )
 
 type Status struct {
@@ -16,6 +26,12 @@ type Status struct {
 	LastCheck        time.Time
 	LastErr          string
 	ConsecutiveFails int // Tracks consecutive health check failures (failures happening one after another)
+	ProjectID        string
+}
+
+type TargetHealthConfig struct {
+	HealthPath string
+	ProjectID  string
 }
 
 // Runs concurrent health checks for upstream services and store their status.
@@ -23,6 +39,7 @@ type Checker struct {
 	mu          sync.RWMutex
 	statuses    map[string]*Status // key = upstream base URL
 	healthPaths map[string]string  // key = upstream base URL, value = health path (e.g. "/health")
+	projectIDs  map[string]string  // key = upstream base URL, value = project ID
 
 	client       *http.Client
 	interval     time.Duration
@@ -39,6 +56,7 @@ func New(interval time.Duration, probeTimeout time.Duration, logger zerolog.Logg
 	return &Checker{
 		statuses:     make(map[string]*Status),
 		healthPaths:  make(map[string]string),
+		projectIDs:   make(map[string]string),
 		interval:     interval,
 		probeTimeout: probeTimeout,
 		logger:       logger.With().Str("component", "health_checker").Logger(),
@@ -51,10 +69,10 @@ func New(interval time.Duration, probeTimeout time.Duration, logger zerolog.Logg
 	}
 }
 
-// Register adds an upstream URL to be health-checked with its specific health path.
+// Register adds an upstream URL to be health-checked with its specific health path and project ID.
 // If healthPath is empty, "/health" is used as a safe default.
 // Safe to call anytime; if the URL already exists the health path is updated.
-func (c *Checker) Register(baseURL, healthPath string) {
+func (c *Checker) Register(baseURL, healthPath, projectID string) {
 	if healthPath == "" {
 		healthPath = "/health"
 	}
@@ -62,28 +80,31 @@ func (c *Checker) Register(baseURL, healthPath string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.projectIDs[baseURL] = projectID
+	c.healthPaths[baseURL] = healthPath
+
 	if _, exists := c.statuses[baseURL]; !exists {
-		c.statuses[baseURL] = &Status{Healthy: true}
+		c.statuses[baseURL] = &Status{Healthy: true, ProjectID: projectID}
 		c.logger.Info().
 			Str("upstream", baseURL).
 			Str("health_path", healthPath).
+			Str("project_id", projectID).
 			Msg("health: registered new upstream")
 	}
-	c.healthPaths[baseURL] = healthPath
 }
 
 // RegisterAll registers multiple upstreams. The map key is the base URL,
 // the value is the health path for that upstream.
 func (c *Checker) RegisterAll(targets map[string]string) {
 	for url, path := range targets {
-		c.Register(url, path)
+		c.Register(url, path, "")
 	}
 }
 
 // SyncTargets reconciles the health checker's watch list with the desired set.
-// desired is a map of baseURL → healthPath.
+// desired is a map of baseURL → TargetHealthConfig.
 // URLs no longer in the desired set are unregistered.
-func (c *Checker) SyncTargets(desired map[string]string) {
+func (c *Checker) SyncTargets(desired map[string]TargetHealthConfig) {
 	want := make(map[string]struct{}, len(desired))
 	for u := range desired {
 		want[u] = struct{}{}
@@ -98,8 +119,8 @@ func (c *Checker) SyncTargets(desired map[string]string) {
 	}
 	c.mu.RUnlock()
 
-	for url, path := range desired {
-		c.Register(url, path)
+	for url, cfg := range desired {
+		c.Register(url, cfg.HealthPath, cfg.ProjectID)
 	}
 	for _, u := range toRemove {
 		c.Unregister(u)
@@ -117,6 +138,7 @@ func (c *Checker) Unregister(baseURL string) {
 
 	delete(c.statuses, baseURL)
 	delete(c.healthPaths, baseURL)
+	delete(c.projectIDs, baseURL)
 	c.logger.Info().
 		Str("upstream", baseURL).
 		Msg("health: unregistered upstream")
@@ -242,12 +264,12 @@ func (c *Checker) probe(ctx context.Context, baseURL string) (bool, string) {
 
 func (c *Checker) setStatus(baseURL string, healthy bool, errMsg string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	prev, ok := c.statuses[baseURL]
 	if !ok {
+		c.mu.Unlock()
 		return
 	}
+	projectID := c.projectIDs[baseURL]
 
 	stateChanged := prev.Healthy != healthy
 
@@ -278,4 +300,11 @@ func (c *Checker) setStatus(baseURL string, healthy bool, errMsg string) {
 	} else {
 		prev.LastErr = errMsg
 	}
+	c.mu.Unlock()
+
+	val := 0.0
+	if healthy {
+		val = 1.0
+	}
+	UpstreamHealthGauge.WithLabelValues(projectID, baseURL).Set(val)
 }

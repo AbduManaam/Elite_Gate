@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"elitegate/internal/config"
 
@@ -27,8 +28,8 @@ func NewPostgres(logger zerolog.Logger, cfg config.DatabaseConfig) (*sql.DB, err
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("postgres ping failed: %w", err)
+	if err := pingWithRetry(db, logger); err != nil {
+		return nil, err
 	}
 
 	logger.Info().Msg("Connected to Postgres, running migrations...")
@@ -53,4 +54,23 @@ func NewPostgres(logger zerolog.Logger, cfg config.DatabaseConfig) (*sql.DB, err
 	logger.Info().Msg("Database migrations applied successfully!")
 
 	return db, nil
+}
+
+// pingWithRetry retries the initial connection a few times with linear backoff.
+// Covers transient DNS propagation delays and postgres not yet accepting
+// connections despite passing its healthcheck a moment earlier.
+func pingWithRetry(db *sql.DB, logger zerolog.Logger) error {
+	const maxAttempts = 5
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err = db.Ping(); err == nil {
+			return nil
+		}
+		logger.Warn().Err(err).Int("attempt", attempt).Int("max_attempts", maxAttempts).
+			Msg("postgres ping failed, retrying")
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second) // 1s, 2s, 3s, 4s
+		}
+	}
+	return fmt.Errorf("postgres ping failed after %d attempts: %w", maxAttempts, err)
 }

@@ -8,10 +8,12 @@ import (
 
 	"elitegate/internal/admin/handler"
 	"elitegate/internal/admin/middleware"
+	"elitegate/internal/admin/service"
 	"elitegate/internal/auth"
 	"elitegate/internal/config"
 	"elitegate/internal/container"
 	"elitegate/internal/ipfilter"
+	"elitegate/internal/promclient"
 	"elitegate/internal/ratelimit"
 	"elitegate/internal/storage"
 
@@ -80,6 +82,13 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	platformHandler := handler.NewPlatformHandler(
 		projectRepo, gatewayRepo, authRepo, containerMgr, syncHandler, logger,
 	)
+	promClient := promclient.NewClient(cfg.Server.PrometheusURL, 5*time.Second)
+	metricsCacheTTL, err := time.ParseDuration(cfg.Server.MetricsCacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("parse server.metrics_cache_ttl: %w", err)
+	}
+	metricsSvc := service.NewMetricsService(promClient, metricsCacheTTL)
+	metricsHandler := handler.NewMetricsHandler(metricsSvc, logger)
 
 	var ipAllowlist gin.HandlerFunc
 	if len(cfg.Server.AdminIPAllowlist) > 0 {
@@ -135,6 +144,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			platform.DELETE("/projects/:projectId", platformHandler.DeleteTenant)
 			platform.GET("/health", platformHandler.PlatformHealth)
 			platform.GET("/metrics", platformHandler.PlatformMetrics)
+			platform.GET("/metrics/system", metricsHandler.SystemMetrics)
 			platform.PATCH("/projects/:projectId/suspend", platformHandler.SuspendTenant)
 			platform.PATCH("/projects/:projectId/reactivate", platformHandler.ReactivateTenant)
 			platform.POST("/gateways/:gatewayId/restart", platformHandler.RestartGateway)
@@ -205,6 +215,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				gateways.GET("", middleware.RBAC(middleware.RoleViewer), gatewayHandler.List)
 				gateways.POST("", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Provision)
 				gateways.DELETE("/:gatewayId", middleware.RBAC(middleware.RoleEditor), gatewayHandler.Decommission)
+			}
+			projectMetrics := projectGroup.Group("/metrics")
+			{
+				projectMetrics.GET("/query", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryInstant)
+				projectMetrics.GET("/query-range", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryRange)
+				projectMetrics.GET("/summary", middleware.RBAC(middleware.RoleViewer), metricsHandler.Summary)
 			}
 			projectGroup.POST("/reload", middleware.RBAC(middleware.RoleEditor), syncHandler.ReloadProject)
 		}
