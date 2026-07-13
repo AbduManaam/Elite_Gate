@@ -15,11 +15,12 @@ import (
 type PolicyHandler struct {
 	policyRepo *storage.PolicyRepo
 	routeRepo  *storage.RouteRepo
+	auditSvc   *service.AuditService
 	logger     zerolog.Logger
 }
 
-func NewPolicyHandler(policyRepo *storage.PolicyRepo, routeRepo *storage.RouteRepo, logger zerolog.Logger) *PolicyHandler {
-	return &PolicyHandler{policyRepo: policyRepo, routeRepo: routeRepo, logger: logger}
+func NewPolicyHandler(policyRepo *storage.PolicyRepo, routeRepo *storage.RouteRepo, logger zerolog.Logger, auditSvc *service.AuditService) *PolicyHandler {
+	return &PolicyHandler{policyRepo: policyRepo, routeRepo: routeRepo, auditSvc: auditSvc, logger: logger}
 }
 
 type policyRequest struct {
@@ -63,6 +64,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"policy": p})
+	h.auditSvc.Record(c, "policy.create", "policy", p.ID, p.Name, gin.H{"name": p.Name, "auth_required": p.AuthRequired, "rate_limit_rpm": p.RateLimitRPM, "allowed_origins": p.AllowedOrigins, "allowed_roles": p.AllowedRoles, "allowed_scopes": p.AllowedScopes})
 }
 
 func (h *PolicyHandler) List(c *gin.Context) {
@@ -98,6 +100,7 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "policy.delete", "policy", id, "", nil)
 	c.JSON(http.StatusOK, gin.H{"message": "policy deleted", "id": id})
 }
 
@@ -153,6 +156,7 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 
 	p.ID = id
 	h.logger.Info().Str("policy_id", p.ID).Str("name", p.Name).Msg("policy updated successfully")
+	h.auditSvc.Record(c, "policy.update", "policy", id, p.Name, gin.H{"name": p.Name, "auth_required": p.AuthRequired, "rate_limit_rpm": p.RateLimitRPM, "allowed_origins": p.AllowedOrigins, "allowed_roles": p.AllowedRoles, "allowed_scopes": p.AllowedScopes})
 	c.JSON(http.StatusOK, gin.H{"policy": p})
 }
 
@@ -205,6 +209,7 @@ func (h *PolicyHandler) AssignPolicy(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("route_id", routeID).Str("policy_id", req.PolicyID).Msg("policy assigned to route")
+	h.auditSvc.Record(c, "policy.update", "policy", req.PolicyID, "", gin.H{"action": "assign", "route_id": routeID})
 	c.JSON(http.StatusOK, gin.H{"message": "policy assigned successfully", "route": route})
 }
 
@@ -222,6 +227,10 @@ func (h *PolicyHandler) RemovePolicy(c *gin.Context) {
 		return
 	}
 
+	var policyID string
+	if route.PolicyID != nil {
+		policyID = *route.PolicyID
+	}
 	route.PolicyID = nil
 
 	if err := h.routeRepo.Update(c.Request.Context(), routeID, route); err != nil {
@@ -235,5 +244,8 @@ func (h *PolicyHandler) RemovePolicy(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("route_id", routeID).Msg("policy removed from route")
+	if policyID != "" {
+		h.auditSvc.Record(c, "policy.update", "policy", policyID, "", gin.H{"action": "remove", "route_id": routeID})
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "policy removed successfully", "route": route})
 }

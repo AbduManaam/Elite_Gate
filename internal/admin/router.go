@@ -65,13 +65,15 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	auditLogRepo := storage.NewAuditLogRepo(db, logger)
 	gatewayRepo := storage.NewGatewayRepo(db)
 
+	auditSvc := service.NewAuditService(auditLogRepo, logger)
+
 	// Handlers initialized
-	routeHandler := handler.NewRouteHandler(routeRepo, logger)
-	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger)
-	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamTargetRepo, logger)
-	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger)
+	routeHandler := handler.NewRouteHandler(routeRepo, logger, auditSvc)
+	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger, auditSvc)
+	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamTargetRepo, logger, auditSvc)
+	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger, auditSvc)
 	projectHandler := handler.NewProjectHandler(projectRepo, originCache, logger)
-	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger)
+	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger, auditSvc)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
 	drainTimeout, err := time.ParseDuration(cfg.Server.DrainTimeout)
 	if err != nil {
@@ -120,7 +122,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	v1.Use(middleware.AdminAuth(adminTokens))
 	{
 		membershipRepo := storage.NewMembershipRepo(db, logger)
-		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger)
+		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger, auditSvc)
 		userLookupLimiter := ratelimit.NewMemoryLimiter(20) // 20 lookups/min per caller
 		userLookupLimit := middleware.UserLookupRateLimit(userLookupLimiter, 20)
 

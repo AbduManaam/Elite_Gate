@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
@@ -25,8 +26,22 @@ func NewAuditLogHandler(repo *storage.AuditLogRepo, logger zerolog.Logger) *Audi
 // List handles GET /audit-logs?limit=100&offset=0
 func (h *AuditLogHandler) List(c *gin.Context) {
 	filter := model.AuditLogFilter{
-		Limit:  parseQueryInt(c, "limit", 100),
+		Limit:  parseQueryInt(c, "limit", 20),
 		Offset: parseQueryInt(c, "offset", 0),
+		Actor:  c.Query("actor"),
+		Action: c.Query("action"),
+	}
+
+	if from := c.Query("date_from"); from != "" {
+		if t, err := time.Parse("2006-01-02", from); err == nil {
+			filter.DateFrom = &t
+		}
+	}
+	if to := c.Query("date_to"); to != "" {
+		if t, err := time.Parse("2006-01-02", to); err == nil {
+			t = t.Add(24 * time.Hour) // inclusive end-of-day
+			filter.DateTo = &t
+		}
 	}
 
 	h.logger.Info().
@@ -34,7 +49,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 		Int("offset", filter.Offset).
 		Msg("listing audit logs")
 
-	logs, err := h.repo.List(c.Request.Context(), filter)
+	page, err := h.repo.List(c.Request.Context(), filter)
 	if err != nil {
 		h.logger.Error().
 			Err(err).
@@ -45,10 +60,10 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info().Int("count", len(logs)).Msg("audit logs listed successfully")
+	h.logger.Info().Int("count", len(page.Logs)).Msg("audit logs listed successfully")
 	c.JSON(http.StatusOK, gin.H{
-		"audit_logs": logs,
-		"count":      len(logs),
+		"audit_logs": page.Logs,
+		"total":      page.Total,
 		"offset":     filter.Offset,
 		"limit":      filter.Limit,
 	})

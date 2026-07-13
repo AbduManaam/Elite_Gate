@@ -12,15 +12,17 @@ import (
 )
 
 type RouteHandler struct {
-	repo   *storage.RouteRepo
-	logger zerolog.Logger
+	repo     *storage.RouteRepo
+	auditSvc *service.AuditService
+	logger   zerolog.Logger
 }
 
 // Receive route-related HTTP requests, call the repository to perform database operations, and return HTTP responses.
-func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger) *RouteHandler {
+func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger, auditSvc *service.AuditService) *RouteHandler {
 	return &RouteHandler{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		auditSvc: auditSvc,
+		logger:   logger,
 	}
 }
 
@@ -115,6 +117,7 @@ func (h *RouteHandler) Create(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route created successfully")
+	h.auditSvc.Record(c, "route.create", "route", rt.ID, rt.Path, gin.H{"name": rt.Name, "path": rt.Path, "upstream_id": rt.UpstreamID, "methods": rt.Methods, "match_type": rt.MatchType, "enabled": rt.Enabled})
 	c.JSON(http.StatusCreated, gin.H{"route": rt})
 }
 
@@ -130,6 +133,7 @@ func (h *RouteHandler) Delete(c *gin.Context) {
 	err := h.repo.Delete(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route deleted")
+		h.auditSvc.Record(c, "route.delete", "route", id, "", nil)
 		c.JSON(http.StatusOK, gin.H{"message": "route deleted", "id": id})
 		return
 	}
@@ -199,6 +203,7 @@ func (h *RouteHandler) Update(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("route_id", rt.ID).Str("path", rt.Path).Msg("route updated successfully")
+	h.auditSvc.Record(c, "route.update", "route", id, rt.Path, gin.H{"name": rt.Name, "path": rt.Path, "upstream_id": rt.UpstreamID, "methods": rt.Methods, "match_type": rt.MatchType, "enabled": rt.Enabled})
 	c.JSON(http.StatusOK, gin.H{"route": rt})
 }
 
@@ -214,6 +219,7 @@ func (h *RouteHandler) Disable(c *gin.Context) {
 	err := h.repo.Disable(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route disabled successfully")
+		h.auditSvc.Record(c, "route.update", "route", id, "", gin.H{"enabled": false})
 		c.JSON(http.StatusOK, gin.H{"message": "route disabled", "id": id})
 		return
 	}
@@ -239,6 +245,7 @@ func (h *RouteHandler) Enable(c *gin.Context) {
 	err := h.repo.Enable(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route enabled successfully")
+		h.auditSvc.Record(c, "route.update", "route", id, "", gin.H{"enabled": true})
 		c.JSON(http.StatusOK, gin.H{"message": "route enabled", "id": id})
 		return
 	}

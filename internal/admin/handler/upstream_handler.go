@@ -16,17 +16,20 @@ import (
 )
 
 type UpstreamHandler struct {
-	repo   *storage.UpstreamRepo
-	logger zerolog.Logger
+	repo     *storage.UpstreamRepo
+	auditSvc *service.AuditService
+	logger   zerolog.Logger
 }
 
 func NewUpstreamHandler(
 	repo *storage.UpstreamRepo,
 	logger zerolog.Logger,
+	auditSvc *service.AuditService,
 ) *UpstreamHandler {
 	return &UpstreamHandler{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		auditSvc: auditSvc,
+		logger:   logger,
 	}
 }
 
@@ -152,6 +155,8 @@ func (h *UpstreamHandler) Create(c *gin.Context) {
 		Str("name", u.Name).
 		Msg("upstream created successfully")
 
+	h.auditSvc.Record(c, "upstream.create", "upstream", u.ID, u.Name, gin.H{"name": u.Name, "target_url": u.TargetURL, "protocol": u.Protocol, "health_path": u.HealthPath, "enabled": u.Enabled, "lb_strategy": u.LBStrategy})
+
 	c.JSON(http.StatusCreated, gin.H{
 		"upstream": u,
 	})
@@ -208,6 +213,7 @@ func (h *UpstreamHandler) Update(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "upstream.update", "upstream", id, u.Name, gin.H{"name": u.Name, "target_url": u.TargetURL, "protocol": u.Protocol, "health_path": u.HealthPath, "enabled": u.Enabled, "lb_strategy": u.LBStrategy})
 	c.JSON(http.StatusOK, gin.H{"upstream": u})
 }
 
@@ -224,6 +230,7 @@ func (h *UpstreamHandler) Disable(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "upstream.update", "upstream", id, "", gin.H{"enabled": false})
 	c.JSON(http.StatusOK, gin.H{"message": "upstream disabled", "id": id})
 }
 
@@ -240,6 +247,7 @@ func (h *UpstreamHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "upstream.delete", "upstream", id, "", nil)
 	c.JSON(http.StatusOK, gin.H{"message": "upstream deleted", "id": id})
 }
 

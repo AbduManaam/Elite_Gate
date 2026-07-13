@@ -16,14 +16,16 @@ import (
 )
 
 type ApiKeyHandler struct {
-	repo   *storage.ApiKeyRepo
-	logger zerolog.Logger
+	repo     *storage.ApiKeyRepo
+	auditSvc *service.AuditService
+	logger   zerolog.Logger
 }
 
-func NewApiKeyHandler(repo *storage.ApiKeyRepo, logger zerolog.Logger) *ApiKeyHandler {
+func NewApiKeyHandler(repo *storage.ApiKeyRepo, logger zerolog.Logger, auditSvc *service.AuditService) *ApiKeyHandler {
 	return &ApiKeyHandler{
-		repo:   repo,
-		logger: logger.With().Str("handler", "api_key").Logger(),
+		repo:     repo,
+		auditSvc: auditSvc,
+		logger:   logger.With().Str("handler", "api_key").Logger(),
 	}
 }
 
@@ -58,6 +60,8 @@ func (h *ApiKeyHandler) Create(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("key_id", record.ID).Str("name", record.Name).Msg("API key created successfully")
+
+	h.auditSvc.Record(c, "api_key.create", "api_key", record.ID, record.Name, gin.H{"name": record.Name, "roles": record.Roles, "scopes": record.Scopes})
 
 	// Return root fields as well as both nested options to be highly compatible with Postman tests
 	c.JSON(http.StatusCreated, gin.H{
@@ -104,6 +108,8 @@ func (h *ApiKeyHandler) Rotate(c *gin.Context) {
 
 	h.logger.Info().Str("old_key_id", id).Str("new_key_id", record.ID).Msg("API key rotated successfully")
 
+	h.auditSvc.Record(c, "api_key.update", "api_key", record.ID, record.Name, gin.H{"action": "rotate", "name": record.Name, "old_key_id": id})
+
 	c.JSON(http.StatusOK, gin.H{
 		"id":         record.ID,
 		"project_id": record.ProjectID,
@@ -140,6 +146,7 @@ func (h *ApiKeyHandler) Revoke(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("key_id", id).Msg("API key revoked successfully")
+	h.auditSvc.Record(c, "api_key.revoke", "api_key", id, "", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "api key revoked",
 		"id":      id,

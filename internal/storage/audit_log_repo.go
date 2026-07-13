@@ -44,9 +44,13 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 		return err
 	}
 
+	if log.Status == "" {
+		log.Status = "success"
+	}
+
 	const q = `
-		INSERT INTO audit_logs (project_id, admin_user_id, action, entity_type, entity_id, changes)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO audit_logs (project_id, admin_user_id, action, entity_type, entity_id, entity_label, changes, ip_address, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::inet, $9)
 		RETURNING id, created_at
 	`
 
@@ -56,7 +60,10 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 		log.Action,
 		log.EntityType,
 		log.EntityID,
+		log.EntityLabel,
 		log.Changes,
+		log.IPAddress,
+		log.Status,
 	).Scan(&log.ID, &log.CreatedAt); err != nil {
 		return fmt.Errorf("audit_log create: %w", err)
 	}
@@ -72,9 +79,9 @@ func (r *AuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
 	return nil
 }
 
-// List returns paginated audit logs for the tenant in ctx.
-// Pass a zero-value AuditLogFilter to use defaults (limit=100, offset=0).
-func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]model.AuditLog, error) {
+// List returns a filtered, paginated page of audit logs for the tenant in ctx,
+// along with the total matching row count for pagination controls.
+func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) (*model.AuditLogPage, error) {
 	tc, err := TenantFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -93,14 +100,31 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 		offset = 0
 	}
 
-	const q = `
-		SELECT id, project_id::text, COALESCE(admin_user_id::text, ''),
-		       action, entity_type, entity_id, changes::text, created_at
-		FROM audit_logs
-		WHERE project_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
+	// Build WHERE clause incrementally so unset filters don't affect the query.
+	where := "WHERE al.project_id = $1"
+	args := []any{tc.ProjectID}
+	argN := 2
+
+	if f.Actor != "" {
+		where += fmt.Sprintf(" AND u.username ILIKE $%d", argN)
+		args = append(args, "%"+f.Actor+"%")
+		argN++
+	}
+	if f.Action != "" {
+		where += fmt.Sprintf(" AND al.action = $%d", argN)
+		args = append(args, f.Action)
+		argN++
+	}
+	if f.DateFrom != nil {
+		where += fmt.Sprintf(" AND al.created_at >= $%d", argN)
+		args = append(args, *f.DateFrom)
+		argN++
+	}
+	if f.DateTo != nil {
+		where += fmt.Sprintf(" AND al.created_at <= $%d", argN)
+		args = append(args, *f.DateTo)
+		argN++
+	}
 
 	r.logger.Debug().
 		Str("project_id", tc.ProjectID.String()).
@@ -108,7 +132,32 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 		Int("offset", offset).
 		Msg("listing audit logs")
 
-	rows, err := r.db.QueryContext(ctx, q, tc.ProjectID, limit, offset)
+	countQ := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM audit_logs al
+		LEFT JOIN admin_users u ON u.id = al.admin_user_id
+		%s
+	`, where)
+
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("audit_log count: %w", err)
+	}
+
+	listQ := fmt.Sprintf(`
+		SELECT al.id, al.project_id::text, COALESCE(al.admin_user_id::text, ''),
+		       COALESCE(u.username, 'system'),
+		       al.action, al.entity_type, al.entity_id, COALESCE(al.entity_label, ''),
+		       al.changes::text, COALESCE(al.ip_address::text, ''), al.status, al.created_at
+		FROM audit_logs al
+		LEFT JOIN admin_users u ON u.id = al.admin_user_id
+		%s
+		ORDER BY al.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argN, argN+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.QueryContext(ctx, listQ, args...)
 	if err != nil {
 		return nil, fmt.Errorf("audit_log list: %w", err)
 	}
@@ -118,9 +167,9 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 	for rows.Next() {
 		var l model.AuditLog
 		if err := rows.Scan(
-			&l.ID, &l.ProjectID, &l.AdminUserID,
-			&l.Action, &l.EntityType, &l.EntityID,
-			&l.Changes, &l.CreatedAt,
+			&l.ID, &l.ProjectID, &l.AdminUserID, &l.Actor,
+			&l.Action, &l.EntityType, &l.EntityID, &l.EntityLabel,
+			&l.Changes, &l.IPAddress, &l.Status, &l.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("audit_log list scan: %w", err)
 		}
@@ -136,7 +185,7 @@ func (r *AuditLogRepo) List(ctx context.Context, f model.AuditLogFilter) ([]mode
 		Int("offset", offset).
 		Msg("audit logs listed")
 
-	return logs, nil
+	return &model.AuditLogPage{Logs: logs, Total: total}, nil
 }
 
 // PruneAuditLogs deletes entries older than olderThan globally (no tenant scoping).

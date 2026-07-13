@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 	"errors"
@@ -11,14 +12,16 @@ import (
 )
 
 type UpstreamTargetHandler struct {
-	repo   *storage.UpstreamTargetRepo
-	logger zerolog.Logger
+	repo     *storage.UpstreamTargetRepo
+	auditSvc *service.AuditService
+	logger   zerolog.Logger
 }
 
-func NewUpstreamTargetHandler(repo *storage.UpstreamTargetRepo, logger zerolog.Logger) *UpstreamTargetHandler {
+func NewUpstreamTargetHandler(repo *storage.UpstreamTargetRepo, logger zerolog.Logger, auditSvc *service.AuditService) *UpstreamTargetHandler {
 	return &UpstreamTargetHandler{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		auditSvc: auditSvc,
+		logger:   logger,
 	}
 }
 
@@ -72,6 +75,8 @@ func (h *UpstreamTargetHandler) Add(c *gin.Context) {
 		Str("target_url", t.TargetURL).
 		Msg("upstream target added")
 
+	h.auditSvc.Record(c, "upstream.update", "upstream", upstreamID, t.TargetURL, gin.H{"action": "target_add", "target_url": t.TargetURL, "weight": t.Weight, "enabled": t.Enabled})
+
 	c.JSON(http.StatusCreated, gin.H{"target": t})
 }
 
@@ -113,5 +118,6 @@ func (h *UpstreamTargetHandler) Remove(c *gin.Context) {
 	}
 
 	h.logger.Info().Str("target_id", targetID).Msg("upstream target removed")
+	h.auditSvc.Record(c, "upstream.update", "upstream", targetID, "", gin.H{"action": "target_remove", "target_id": targetID})
 	c.JSON(http.StatusOK, gin.H{"message": "target removed", "id": targetID})
 }

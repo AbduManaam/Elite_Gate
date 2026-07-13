@@ -17,12 +17,13 @@ import (
 )
 
 type MembershipHandler struct {
-	repo   *storage.MembershipRepo
-	logger zerolog.Logger
+	repo     *storage.MembershipRepo
+	auditSvc *service.AuditService
+	logger   zerolog.Logger
 }
 
-func NewMembershipHandler(repo *storage.MembershipRepo, logger zerolog.Logger) *MembershipHandler {
-	return &MembershipHandler{repo: repo, logger: logger}
+func NewMembershipHandler(repo *storage.MembershipRepo, logger zerolog.Logger, auditSvc *service.AuditService) *MembershipHandler {
+	return &MembershipHandler{repo: repo, auditSvc: auditSvc, logger: logger}
 }
 
 var validMemberRoles = map[string]bool{"owner": true, "editor": true, "viewer": true}
@@ -92,6 +93,7 @@ func (h *MembershipHandler) AddMember(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "member.invite", "member", userID.String(), req.Email, gin.H{"role": req.Role, "email": req.Email})
 	c.JSON(http.StatusCreated, gin.H{"message": "member added successfully"})
 }
 
@@ -156,6 +158,7 @@ func (h *MembershipHandler) ChangeRole(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "member.role_change", "member", memberID.String(), "", gin.H{"role": req.Role})
 	c.JSON(http.StatusOK, gin.H{"message": "role updated successfully"})
 }
 
@@ -190,6 +193,7 @@ func (h *MembershipHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 
+	h.auditSvc.Record(c, "member.remove", "member", memberID.String(), "", nil)
 	c.JSON(http.StatusOK, gin.H{"message": "member removed successfully"})
 }
 

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"elitegate/internal/model"
@@ -98,6 +99,13 @@ func IsValidMetricName(name string) bool {
 	return ok
 }
 
+func sanitizeFloat(val float64) float64 {
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0.0
+	}
+	return val
+}
+
 // QueryRange returns a chart-ready series for one metric, cached for the
 // configured TTL per (project, metric, range, step).
 func (s *MetricsService) QueryRange(ctx context.Context, projectID string, metric MetricName, window time.Duration, step string) ([]model.TimeSeriesPoint, error) {
@@ -178,7 +186,7 @@ func (s *MetricsService) QueryInstant(ctx context.Context, projectID string, met
 
 	var val float64
 	if len(samples) > 0 {
-		val = samples[0].Value
+		val = sanitizeFloat(samples[0].Value)
 	}
 
 	s.cache.set(cacheKey, val)
@@ -205,7 +213,7 @@ func (s *MetricsService) QuerySystemInstant(ctx context.Context, job string, met
 
 	var val float64
 	if len(samples) > 0 {
-		val = samples[0].Value
+		val = sanitizeFloat(samples[0].Value)
 	}
 
 	s.cache.set(cacheKey, val)
@@ -259,7 +267,7 @@ func (s *MetricsService) QueryInstantGrouped(ctx context.Context, projectID stri
 	for _, sample := range samples {
 		out = append(out, model.MetricSeries{
 			Label:  sample.Labels[groupLabel],
-			Points: []model.TimeSeriesPoint{{Timestamp: sample.Timestamp.UnixMilli(), Value: sample.Value}},
+			Points: []model.TimeSeriesPoint{{Timestamp: sample.Timestamp.UnixMilli(), Value: sanitizeFloat(sample.Value)}},
 		})
 	}
 
@@ -372,7 +380,7 @@ func toPoints(samples []promclient.Sample) []model.TimeSeriesPoint {
 	for _, s := range samples {
 		points = append(points, model.TimeSeriesPoint{
 			Timestamp: s.Timestamp.UnixMilli(),
-			Value:     s.Value,
+			Value:     sanitizeFloat(s.Value),
 		})
 	}
 	return points
