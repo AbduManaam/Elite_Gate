@@ -212,6 +212,61 @@ func (s *MetricsService) QuerySystemInstant(ctx context.Context, job string, met
 	return val, nil
 }
 
+func (s *MetricsService) QuerySystemRange(ctx context.Context, job, metric string, window time.Duration, step string) ([]model.TimeSeriesPoint, error) {
+	builder, ok := systemQueryBuilders[metric]
+	if !ok {
+		return nil, fmt.Errorf("unknown system metric name: %s", metric)
+	}
+
+	cacheKey := fmt.Sprintf("system-range:%s:%s:%s:%s", job, metric, window, step)
+	if cached, ok := s.cache.get(cacheKey); ok {
+		return cached.([]model.TimeSeriesPoint), nil
+	}
+
+	promql := builder(job)
+	now := time.Now()
+	series, err := s.client.QueryRange(ctx, promql, now.Add(-window), now, step)
+	if err != nil {
+		return nil, fmt.Errorf("query system range for %s: %w", metric, err)
+	}
+
+	points := flattenSingleSeries(series)
+	s.cache.set(cacheKey, points)
+	return points, nil
+}
+
+// QueryInstantGrouped runs an instant query that returns multiple labeled
+// results (e.g. topk by path/upstream, or a health-status vector) and keeps
+// each label as its own MetricSeries with a single current-value point.
+func (s *MetricsService) QueryInstantGrouped(ctx context.Context, projectID string, metric MetricName, groupLabel string) ([]model.MetricSeries, error) {
+	tmpl, ok := queryBuilders[metric]
+	if !ok {
+		return nil, ErrUnknownMetric
+	}
+
+	cacheKey := fmt.Sprintf("instant-grouped:%s:%s", projectID, metric)
+	if cached, ok := s.cache.get(cacheKey); ok {
+		return cached.([]model.MetricSeries), nil
+	}
+
+	promql := tmpl(projectID)
+	samples, err := s.client.Query(ctx, promql)
+	if err != nil {
+		return nil, fmt.Errorf("query instant grouped for %s: %w", metric, err)
+	}
+
+	out := make([]model.MetricSeries, 0, len(samples))
+	for _, sample := range samples {
+		out = append(out, model.MetricSeries{
+			Label:  sample.Labels[groupLabel],
+			Points: []model.TimeSeriesPoint{{Timestamp: sample.Timestamp.UnixMilli(), Value: sample.Value}},
+		})
+	}
+
+	s.cache.set(cacheKey, out)
+	return out, nil
+}
+
 // DashboardSummary aggregates every KPI + the main trend chart + status
 // breakdown into a single response, for the observability overview page.
 // This is one cache-checked call per underlying metric internally, but one
@@ -226,7 +281,7 @@ func (s *MetricsService) DashboardSummary(ctx context.Context, projectID string)
 	if err != nil {
 		return nil, err
 	}
-	errorRate, err := s.QueryInstant(ctx, projectID, MetricErrorRatePct)
+	errorRatePct, err := s.QueryInstant(ctx, projectID, MetricErrorRatePct)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +297,15 @@ func (s *MetricsService) DashboardSummary(ctx context.Context, projectID string)
 	if err != nil {
 		return nil, err
 	}
+	totalRequests, err := s.QueryInstant(ctx, projectID, MetricTotalRequests)
+	if err != nil {
+		return nil, err
+	}
+	latencyAvg, err := s.QueryInstant(ctx, projectID, MetricLatencyAvg)
+	if err != nil {
+		return nil, err
+	}
+
 	trend, err := s.QueryRange(ctx, projectID, MetricRequestRate, time.Hour, "60s")
 	if err != nil {
 		return nil, err
@@ -250,17 +314,46 @@ func (s *MetricsService) DashboardSummary(ctx context.Context, projectID string)
 	if err != nil {
 		return nil, err
 	}
+	activeSparkline, err := s.QueryRange(ctx, projectID, MetricActiveRequests, 15*time.Minute, "15s")
+	if err != nil {
+		return nil, err
+	}
+	topRoutes, err := s.QueryInstantGrouped(ctx, projectID, MetricTopRoutes, "path")
+	if err != nil {
+		return nil, err
+	}
+	topUpstreams, err := s.QueryInstantGrouped(ctx, projectID, MetricTopUpstreams, "upstream")
+	if err != nil {
+		return nil, err
+	}
+	healthSeries, err := s.QueryInstantGrouped(ctx, projectID, MetricUpstreamHealth, "upstream")
+	if err != nil {
+		return nil, err
+	}
+
+	upstreamHealth := make([]model.UpstreamHealthStatus, 0, len(healthSeries))
+	for _, series := range healthSeries {
+		healthy := len(series.Points) > 0 && series.Points[0].Value == 1
+		upstreamHealth = append(upstreamHealth, model.UpstreamHealthStatus{Upstream: series.Label, Healthy: healthy})
+	}
 
 	summary := &model.DashboardSummary{
-		ProjectID:        projectID,
-		GeneratedAt:      time.Now(),
-		RequestRate:      model.KPIValue{Value: requestRate, Unit: "req/s"},
-		ErrorRate:        model.KPIValue{Value: errorRate, Unit: "req/s"},
-		LatencyP50:       model.KPIValue{Value: p50, Unit: "ms"},
-		LatencyP95:       model.KPIValue{Value: p95, Unit: "ms"},
-		ActiveRequests:   model.KPIValue{Value: active, Unit: "count"},
-		RequestRateTrend: trend,
-		StatusBreakdown:  statusBreakdown,
+		ProjectID:               projectID,
+		GeneratedAt:             time.Now(),
+		RequestRate:             model.KPIValue{Value: requestRate, Unit: "req/s"},
+		ErrorRate:               model.KPIValue{Value: errorRatePct, Unit: "%"},
+		ErrorRatePct:            model.KPIValue{Value: errorRatePct, Unit: "%"},
+		LatencyP50:              model.KPIValue{Value: p50, Unit: "ms"},
+		LatencyP95:              model.KPIValue{Value: p95, Unit: "ms"},
+		ActiveRequests:          model.KPIValue{Value: active, Unit: "count"},
+		TotalRequests:           model.KPIValue{Value: totalRequests, Unit: "count"},
+		LatencyAvg:              model.KPIValue{Value: latencyAvg, Unit: "ms"},
+		RequestRateTrend:        trend,
+		StatusBreakdown:         statusBreakdown,
+		TopRoutes:               topRoutes,
+		TopUpstreams:            topUpstreams,
+		UpstreamHealth:          upstreamHealth,
+		ActiveRequestsSparkline: activeSparkline,
 	}
 
 	s.cache.set(cacheKey, summary)

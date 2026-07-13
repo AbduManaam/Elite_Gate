@@ -88,7 +88,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		return nil, fmt.Errorf("parse server.metrics_cache_ttl: %w", err)
 	}
 	metricsSvc := service.NewMetricsService(promClient, metricsCacheTTL)
-	metricsHandler := handler.NewMetricsHandler(metricsSvc, logger)
+	metricsHandler := handler.NewMetricsHandler(metricsSvc, gatewayRepo, logger)
 
 	var ipAllowlist gin.HandlerFunc
 	if len(cfg.Server.AdminIPAllowlist) > 0 {
@@ -108,14 +108,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	adminGroup.POST("/refresh", authHandler.Refresh)
 	adminGroup.POST("/logout", authHandler.Logout)
 
-	// ── Public bootstrap registration ─────────────────────────────────
-	// Only works when 0 admin users exist in the database.
-	// After the first admin is created, returns 403 Forbidden.
+	// Public bootstrap registration.
+	// Disabled after the first admin account is created.
 	adminGroup.POST("/register", authHandler.Register)
 
-	// ── Permanent public self-service tenant signup ───────────────────────
-	// Any company can call this to self-onboard. No token, no super-admin needed.
-	// This is the PRIMARY onboarding path for all tenants on the SaaS platform.
+	// Public tenant signup.
+	// Used by companies to create their own account.
 	adminGroup.POST("/signup", authHandler.Signup)
 
 	v1 := adminGroup.Group("/v1")
@@ -145,6 +143,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			platform.GET("/health", platformHandler.PlatformHealth)
 			platform.GET("/metrics", platformHandler.PlatformMetrics)
 			platform.GET("/metrics/system", metricsHandler.SystemMetrics)
+			platform.GET("/metrics/system/range", metricsHandler.SystemMetricsRange)
 			platform.PATCH("/projects/:projectId/suspend", platformHandler.SuspendTenant)
 			platform.PATCH("/projects/:projectId/reactivate", platformHandler.ReactivateTenant)
 			platform.POST("/gateways/:gatewayId/restart", platformHandler.RestartGateway)
@@ -221,16 +220,16 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				projectMetrics.GET("/query", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryInstant)
 				projectMetrics.GET("/query-range", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryRange)
 				projectMetrics.GET("/summary", middleware.RBAC(middleware.RoleViewer), metricsHandler.Summary)
+				projectMetrics.GET("/system", middleware.RBAC(middleware.RoleEditor), metricsHandler.SystemMetrics)
+				projectMetrics.GET("/system/range", middleware.RBAC(middleware.RoleEditor), metricsHandler.SystemMetricsRange)
 			}
 			projectGroup.POST("/reload", middleware.RBAC(middleware.RoleEditor), syncHandler.ReloadProject)
 		}
 
 		admins := v1.Group("/admins")
 		{
-			// SuperAdminOnly: this endpoint is a PLATFORM-OPERATOR SUPPORT TOOL.
-			// Normal tenants onboard via POST /admin/signup — they never hit this route.
-			// Use this only for support escalations (e.g. manually provisioning an account
-			// on a tenant's behalf). Future operator features reuse the same middleware.
+			// SuperAdminOnly: Only platform admins use this API to help customers.
+			// Regular users should use the normal signup endpoint.
 			admins.POST("", middleware.SuperAdminOnly(authRepo, logger), authHandler.Register)
 		}
 	}

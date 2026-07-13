@@ -83,6 +83,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: elitegate_prometheus
+    user: root
 
     ports:
       - "9091:9090"
@@ -90,6 +91,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus-data:/prometheus
+      - /var/run/docker.sock:/var/run/docker.sock
 
     networks:
       - elitegate_net

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"elitegate/internal/admin/service"
+	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -16,12 +17,17 @@ import (
 // service, write the response. All PromQL, caching, and normalization
 // lives in service.MetricsService.
 type MetricsHandler struct {
-	svc    *service.MetricsService
-	logger zerolog.Logger
+	svc         *service.MetricsService
+	gatewayRepo *storage.GatewayRepo
+	logger      zerolog.Logger
 }
 
-func NewMetricsHandler(svc *service.MetricsService, logger zerolog.Logger) *MetricsHandler {
-	return &MetricsHandler{svc: svc, logger: logger}
+func NewMetricsHandler(svc *service.MetricsService, gatewayRepo *storage.GatewayRepo, logger zerolog.Logger) *MetricsHandler {
+	return &MetricsHandler{
+		svc:         svc,
+		gatewayRepo: gatewayRepo,
+		logger:      logger,
+	}
 }
 
 // QueryRange handles GET /admin/v1/projects/:projectId/metrics/query-range?metric=request_rate&range=1h&step=60s
@@ -87,9 +93,24 @@ func (h *MetricsHandler) Summary(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+func (h *MetricsHandler) resolveServiceName(c *gin.Context, serviceName string) string {
+	projectID := c.Param("projectId")
+	if projectID != "" && serviceName == "elitegate-gateway" && h.gatewayRepo != nil {
+		gateways, _, err := h.gatewayRepo.ListByProject(c.Request.Context(), projectID, 10, 0)
+		if err == nil {
+			for _, gw := range gateways {
+				if gw.Plan == "dedicated" && gw.Status == "active" {
+					return fmt.Sprintf("elitegate-gateway-%s", gw.ExternalID)
+				}
+			}
+		}
+	}
+	return serviceName
+}
+
 // SystemMetrics handles GET /admin/v1/platform/metrics/system?service=elitegate-gateway
 func (h *MetricsHandler) SystemMetrics(c *gin.Context) {
-	serviceName := c.DefaultQuery("service", "elitegate-gateway")
+	serviceName := h.resolveServiceName(c, c.DefaultQuery("service", "elitegate-gateway"))
 
 	cpu, err := h.svc.QuerySystemInstant(c.Request.Context(), serviceName, "cpu")
 	if err != nil {
@@ -111,6 +132,27 @@ func (h *MetricsHandler) SystemMetrics(c *gin.Context) {
 	})
 }
 
+// SystemMetricsRange handles GET /admin/v1/platform/metrics/system/range?service=elitegate-gateway&metric=cpu&range=1h&step=60s
+func (h *MetricsHandler) SystemMetricsRange(c *gin.Context) {
+	serviceName := h.resolveServiceName(c, c.DefaultQuery("service", "elitegate-gateway"))
+	metric := c.Query("metric") // "cpu" | "memory"
+
+	window, err := parseWindow(c.DefaultQuery("range", "1h"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	step := c.DefaultQuery("step", "60s")
+
+	points, err := h.svc.QuerySystemRange(c.Request.Context(), serviceName, metric, window, step)
+	if err != nil {
+		h.logger.Error().Err(err).Str("service", serviceName).Str("metric", metric).Msg("system metrics range failed")
+		c.JSON(http.StatusBadGateway, gin.H{"error": "metrics backend unavailable"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"points": points})
+}
 
 var errWindowTooLarge = errors.New("range too large, max 7d")
 
