@@ -95,3 +95,6 @@ test-*.yaml
 
 # Exclude documentation files from git tracking
 /docs/
+
+# Local seed scripts with credentials
+scripts/seed_test_projects.sql
