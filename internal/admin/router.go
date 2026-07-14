@@ -120,6 +120,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 
 	v1 := adminGroup.Group("/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))
+	v1.GET("/me", authHandler.Me)
 	{
 		membershipRepo := storage.NewMembershipRepo(db, logger)
 		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger, auditSvc)

@@ -596,3 +596,26 @@ func (h *AuthHandler) internal(c *gin.Context, err error) {
 		"error": "internal server error",
 	})
 }
+
+// Me() returns the authenticated user's identity and super-admin status.
+// The frontend calls this once per session to determine access permissions.
+func (h *AuthHandler) Me(c *gin.Context) {
+	userID, _ := c.Get(adminmw.AdminUserIDKey)
+	username, _ := c.Get(adminmw.AdminUsernameKey)
+
+	userIDStr, _ := userID.(string)
+	usernameStr, _ := username.(string)
+
+	isSuperAdmin, err := h.repo.IsSuperAdmin(c.Request.Context(), userIDStr)
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", userIDStr).Msg("failed to resolve super-admin status")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user_id":        userIDStr,
+		"username":       usernameStr,
+		"is_super_admin": isSuperAdmin,
+	})
+}
