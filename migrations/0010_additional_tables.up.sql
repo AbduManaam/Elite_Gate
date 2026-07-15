@@ -44,9 +44,6 @@ ALTER TABLE api_keys
     ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS deleted_at  TIMESTAMPTZ;
 
--- Backfill:means updating old API key records and assigning them to a default project ID.
--- What it does =Old API keys are linked to a default project. Then project_id is made mandatory (NOT NULL), 
---so every API key must be connected to a project. This avoids API keys that are not assigned to any project. 
 UPDATE api_keys
 SET project_id = '00000000-0000-0000-0000-000000000000'
 WHERE project_id IS NULL;
@@ -55,7 +52,6 @@ UPDATE api_keys
 SET name = 'seeded-key'
 WHERE name IS NULL;
 
--- Now enforce NOT NULL so future inserts project_id not be empty
 ALTER TABLE api_keys
     ALTER COLUMN project_id SET NOT NULL,
     ALTER COLUMN name        SET NOT NULL;
@@ -71,19 +67,14 @@ ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS api_keys_tenant_isolation ON api_keys;
 CREATE POLICY api_keys_tenant_isolation ON api_keys
 
---Action: When you try to read or delete data (e.g., SELECT * FROM api_keys or DELETE FROM api_keys).
---Meaning: "Show me or let me delete only the rows where the project_id matches my current_project_id()."
-    USING      (project_id = current_project_id())
+   USING      (project_id = current_project_id())
     WITH CHECK (project_id = current_project_id());
 
 
 -- -----------------------------------------------------------------------------
 -- 2. Create gateways table
 -- -----------------------------------------------------------------------------
--- NOTE: id is UUID (consistent with every other table).
---       The Go layer generates a human-readable label (e.g. "gw_abc123") and
---       stores it in external_id for display; the UUID is the real PK.
--- -----------------------------------------------------------------------------
+
 
 CREATE TABLE IF NOT EXISTS gateways (
     id           UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -139,12 +130,6 @@ CREATE POLICY audit_logs_tenant_isolation ON audit_logs
     WITH CHECK (project_id = current_project_id());
 
 
--- -----------------------------------------------------------------------------
--- 4. Seed the test-key for local development
---    Raw key  : "test-key"
---    SHA-256  : 62af8704764faf8ea82fc61ce9c4c3908b6cb97d463a634e9e587d7c885db0ef
---    Project  : 00000000-0000-0000-0000-000000000000  (default / shared project)
--- -----------------------------------------------------------------------------
 
 INSERT INTO api_keys (id, project_id, name, key_hash, status)
 VALUES (
