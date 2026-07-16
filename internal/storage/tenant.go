@@ -56,7 +56,7 @@ func WithTenantContext(ctx context.Context, tc TenantContext) context.Context {
 
 func TenantFromContext(ctx context.Context) (TenantContext, error) {
 	tc, ok := ctx.Value(tenantCtxKey).(TenantContext)
-	if !ok || tc.ProjectID == uuid.Nil {
+	if !ok {
 		return TenantContext{}, fmt.Errorf("tenant context not set in request: %w", ErrForbidden)
 	}
 	return tc, nil
