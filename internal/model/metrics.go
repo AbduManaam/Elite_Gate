@@ -41,6 +41,7 @@ type DashboardSummary struct {
 
 	// Chart data
 	RequestRateTrend        []TimeSeriesPoint      `json:"request_rate_trend"`
+	LatencyAvgTrend         []TimeSeriesPoint      `json:"latency_avg_trend"`
 	StatusBreakdown         []MetricSeries         `json:"status_breakdown"`
 	TopRoutes               []MetricSeries         `json:"top_routes"`         // label = path, points = single latest value
 	TopUpstreams            []MetricSeries         `json:"top_upstreams"`

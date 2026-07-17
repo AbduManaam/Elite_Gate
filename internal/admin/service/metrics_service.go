@@ -49,26 +49,26 @@ var ErrUnknownMetric = fmt.Errorf("unknown metric name")
 
 var queryBuilders = map[MetricName]func(projectID string) string{
 	MetricRequestRate: func(p string) string {
-		return fmt.Sprintf(`sum(rate(gateway_http_requests_total{project_id=%q}[5m]))`, p)
+		return fmt.Sprintf(`sum(rate(gateway_http_requests_total{project_id=%q}[2m]))`, p)
 	},
 	MetricTotalRequests: func(p string) string {
-		return fmt.Sprintf(`sum(increase(gateway_http_requests_total{project_id=%q}[5m]))`, p)
+		return fmt.Sprintf(`sum(increase(gateway_http_requests_total{project_id=%q}[2m]))`, p)
 	},
 	MetricLatencyAvg: func(p string) string {
 		return fmt.Sprintf(
-			`(sum(rate(gateway_http_request_duration_seconds_sum{project_id=%q}[5m])) / sum(rate(gateway_http_request_duration_seconds_count{project_id=%q}[5m]))) * 1000`,
+			`(sum(rate(gateway_http_request_duration_seconds_sum{project_id=%q}[2m])) / sum(rate(gateway_http_request_duration_seconds_count{project_id=%q}[2m]))) * 1000`,
 			p, p,
 		)
 	},
 	MetricLatencyP50: func(p string) string {
-		return fmt.Sprintf(`histogram_quantile(0.50, sum(rate(gateway_http_request_duration_seconds_bucket{project_id=%q}[5m])) by (le)) * 1000`, p)
+		return fmt.Sprintf(`histogram_quantile(0.50, sum(rate(gateway_http_request_duration_seconds_bucket{project_id=%q}[2m])) by (le)) * 1000`, p)
 	},
 	MetricLatencyP95: func(p string) string {
-		return fmt.Sprintf(`histogram_quantile(0.95, sum(rate(gateway_http_request_duration_seconds_bucket{project_id=%q}[5m])) by (le)) * 1000`, p)
+		return fmt.Sprintf(`histogram_quantile(0.95, sum(rate(gateway_http_request_duration_seconds_bucket{project_id=%q}[2m])) by (le)) * 1000`, p)
 	},
 	MetricErrorRatePct: func(p string) string {
 		return fmt.Sprintf(
-			`(sum(rate(gateway_http_requests_total{project_id=%q, status=~"5.."}[5m])) / sum(rate(gateway_http_requests_total{project_id=%q}[5m]))) * 100`,
+			`(sum(rate(gateway_http_requests_total{project_id=%q, status=~"5.."}[2m])) / sum(rate(gateway_http_requests_total{project_id=%q}[2m]))) * 100`,
 			p, p,
 		)
 	},
@@ -76,13 +76,13 @@ var queryBuilders = map[MetricName]func(projectID string) string{
 		return fmt.Sprintf(`sum(gateway_http_active_requests{project_id=%q})`, p)
 	},
 	MetricStatusBreakdown: func(p string) string {
-		return fmt.Sprintf(`sum(rate(gateway_http_requests_total{project_id=%q}[5m])) by (status)`, p)
+		return fmt.Sprintf(`sum(rate(gateway_http_requests_total{project_id=%q}[2m])) by (status)`, p)
 	},
 	MetricTopRoutes: func(p string) string {
-		return fmt.Sprintf(`topk(5, sum(rate(gateway_http_requests_total{project_id=%q}[5m])) by (path))`, p)
+		return fmt.Sprintf(`topk(5, sum(rate(gateway_http_requests_total{project_id=%q}[2m])) by (path))`, p)
 	},
 	MetricTopUpstreams: func(p string) string {
-		return fmt.Sprintf(`topk(5, sum(rate(gateway_http_requests_total{project_id=%q}[5m])) by (upstream))`, p)
+		return fmt.Sprintf(`topk(5, sum(rate(gateway_http_requests_total{project_id=%q}[2m])) by (upstream))`, p)
 	},
 	MetricUpstreamHealth: func(p string) string {
 		return fmt.Sprintf(`gateway_upstream_health_status{project_id=%q}`, p) // instant vector; 1=healthy, 0=unhealthy, per upstream
@@ -318,6 +318,10 @@ func (s *MetricsService) DashboardSummary(ctx context.Context, projectID string)
 	if err != nil {
 		return nil, err
 	}
+	latencyAvgTrend, err := s.QueryRange(ctx, projectID, MetricLatencyAvg, time.Hour, "60s")
+	if err != nil {
+		return nil, err
+	}
 	statusBreakdown, err := s.QueryRangeGrouped(ctx, projectID, MetricStatusBreakdown, time.Hour, "60s", "status")
 	if err != nil {
 		return nil, err
@@ -357,6 +361,7 @@ func (s *MetricsService) DashboardSummary(ctx context.Context, projectID string)
 		TotalRequests:           model.KPIValue{Value: totalRequests, Unit: "count"},
 		LatencyAvg:              model.KPIValue{Value: latencyAvg, Unit: "ms"},
 		RequestRateTrend:        trend,
+		LatencyAvgTrend:         latencyAvgTrend,
 		StatusBreakdown:         statusBreakdown,
 		TopRoutes:               topRoutes,
 		TopUpstreams:            topUpstreams,

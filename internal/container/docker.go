@@ -117,8 +117,9 @@ func (m *DockerContainerManager) Close() error {
 
 // Provision: Creates and starts a new gateway container for a project.
 // Waits until the container is healthy.
-// Returns an endpoint reachable from the admin process.
-func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, projectID, plan string) (endpointIP string, gatewayPort string, err error) {
+// Returns the internal endpoint (for admin health checks / config reloads) and
+// the public endpoint (localhost:<docker-port>) that external clients must use.
+func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, projectID, plan string) (endpointIP, gatewayPort, publicHost, publicPort string, err error) {
 	m.logger.Info().
 		Str("gateway_id", gatewayID).
 		Str("project_id", projectID).
@@ -129,7 +130,7 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 	if !gatewayIDPattern.MatchString(gatewayID) {
 		err = fmt.Errorf("invalid gatewayID %q: must match %s", gatewayID, gatewayIDPattern)
 		m.logger.Error().Err(err).Msg("invalid gateway ID")
-		return "", "", err
+		return "", "", "", "", err
 	}
 
 	containerName := fmt.Sprintf("elitegate-gateway-%s", gatewayID)
@@ -190,7 +191,7 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, containerName)
 	if err != nil {
 		m.logger.Error().Err(err).Str("container_name", containerName).Msg("failed to create container")
-		return "", "", fmt.Errorf("create container %q: %w", containerName, err)
+		return "", "", "", "", fmt.Errorf("create container %q: %w", containerName, err)
 	}
 
 	m.logger.Debug().Str("container_id", resp.ID).Msg("starting container")
@@ -199,7 +200,7 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 		m.logger.Error().Err(err).Str("container_id", resp.ID).Msg("failed to start container, cleaning up")
 		// Best-effort cleanup — ignore secondary error.
 		_ = m.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
-		return "", "", fmt.Errorf("start container %q: %w", containerName, err)
+		return "", "", "", "", fmt.Errorf("start container %q: %w", containerName, err)
 	}
 
 	m.logger.Debug().Str("container_id", resp.ID).Msg("waiting for container to become healthy")
@@ -209,17 +210,17 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 		// Capture logs before removing so the caller can diagnose startup failures.
 		logs := m.lastLogs(context.Background(), resp.ID, 20)
 		_ = m.client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
-		return "", "", fmt.Errorf("container %q did not become healthy: %w\nlast logs:\n%s", containerName, err, logs)
+		return "", "", "", "", fmt.Errorf("container %q did not become healthy: %w\nlast logs:\n%s", containerName, err, logs)
 	}
 
 	m.logger.Debug().Str("container_id", resp.ID).Msg("inspecting container endpoint settings")
 	// Read the actual bound port and container IP from the Docker daemon.
 	// This is the only reliable source — reading before Start gives stale data.
-	ip, port, err := m.inspectEndpoint(ctx, resp.ID)
+	ip, port, pubHost, pubPort, err := m.inspectEndpoint(ctx, resp.ID)
 	if err != nil {
 		m.logger.Error().Err(err).Str("container_id", resp.ID).Msg("failed to inspect container endpoint, cleaning up")
 		_ = m.client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
-		return "", "", fmt.Errorf("read container endpoint: %w", err)
+		return "", "", "", "", fmt.Errorf("read container endpoint: %w", err)
 	}
 
 	m.logger.Info().
@@ -227,24 +228,34 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 		Str("container_id", resp.ID).
 		Str("ip", ip).
 		Str("port", port).
+		Str("public_host", pubHost).
+		Str("public_port", pubPort).
 		Msg("gateway container provisioned successfully")
 
-	return ip, port, nil
+	return ip, port, pubHost, pubPort, nil
 }
 
-// Gets the endpoint the admin process should use to reach the gateway.
-func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerID string) (ip string, port string, err error) {
+// inspectEndpoint returns two distinct addresses:
+//   - internalHost/internalPort: how the admin process itself should reach the
+//     gateway (Docker DNS name when admin runs in-container, else localhost).
+//     Used for health checks and config-reload calls (sync_handler.go, platform_handler.go).
+//   - publicHost/publicPort: the host-mapped address an external client
+//     (browser, curl) must use. This is ALWAYS localhost:<docker-assigned-port>,
+//     regardless of where the admin process itself is running.
+func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerID string) (internalHost, internalPort, publicHost, publicPort string, err error) {
 	info, err := m.client.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return "", "", fmt.Errorf("inspect container: %w", err)
+		return "", "", "", "", fmt.Errorf("inspect container: %w", err)
 	}
 
 	// Get the actual host port assigned by Docker.
 	bindings, ok := info.NetworkSettings.Ports[gatewayContainerPort]
 	if !ok || len(bindings) == 0 {
-		return "", "", fmt.Errorf("no port binding found for %s", gatewayContainerPort)
+		return "", "", "", "", fmt.Errorf("no port binding found for %s", gatewayContainerPort)
 	}
 	hostPort := bindings[0].HostPort
+	// This is the one users need to actually call the API with, e.g. localhost:50979.
+	publicHost, publicPort = "localhost", hostPort
 
 	// Get the container's IP address from the shared network.
 	// Use the default bridge network IP if needed.
@@ -253,16 +264,16 @@ func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerI
 		containerIP = ep.IPAddress
 	}
 	if containerIP == "" {
-		return "", "", fmt.Errorf("container has no IP address on network %q", m.networkName)
+		return "", "", "", "", fmt.Errorf("container has no IP address on network %q", m.networkName)
 	}
 
 	if runningInContainer() {
 		// Use stable container name for Docker DNS resolution
 		containerName := strings.TrimPrefix(info.Name, "/")
-		return containerName, gatewayContainerPort.Port(), nil
+		return containerName, gatewayContainerPort.Port(), publicHost, publicPort, nil
 	}
 
-	return "localhost", hostPort, nil
+	return "localhost", hostPort, publicHost, publicPort, nil
 }
 
 func runningInContainer() bool {

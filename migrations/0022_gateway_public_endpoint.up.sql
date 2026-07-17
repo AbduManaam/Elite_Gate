@@ -1,0 +1,3 @@
+ALTER TABLE gateways
+    ADD COLUMN IF NOT EXISTS public_host TEXT,
+    ADD COLUMN IF NOT EXISTS public_port TEXT;

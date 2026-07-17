@@ -97,7 +97,7 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 	}
 
 	// Step 2 — physical container.
-	ip, port, err := h.containerMgr.Provision(c.Request.Context(), externalID, req.ProjectID, req.Plan)
+	ip, port, publicHost, publicPort, err := h.containerMgr.Provision(c.Request.Context(), externalID, req.ProjectID, req.Plan)
 	if err != nil {
 		h.logger.Error().Err(err).
 			Str("external_id", externalID).
@@ -117,7 +117,7 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 	}
 
 	// Step 3 — register real endpoint.
-	if err := h.repo.Register(c.Request.Context(), externalID, ip, port); err != nil {
+	if err := h.repo.Register(c.Request.Context(), externalID, ip, port, publicHost, publicPort); err != nil {
 		h.logger.Error().Err(err).
 			Str("external_id", externalID).
 			Msg("failed to register gateway endpoint in DB")
@@ -136,6 +136,8 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 		"status":       "active",
 		"endpoint_ip":  ip,
 		"gateway_port": port,
+		"public_host":  publicHost,
+		"public_port":  publicPort,
 	})
 }
 

@@ -38,6 +38,10 @@ type AuthHandler struct {
 	tokens  *authpkg.AdminTokenManager
 	limiter *adminmw.LoginRateLimiter
 	logger  zerolog.Logger
+
+	oauthState      *authpkg.OAuthStateManager
+	googleOAuth     *authpkg.GoogleOAuth
+	frontendBaseURL string
 }
 
 func NewAuthHandler(
@@ -53,6 +57,17 @@ func NewAuthHandler(
 		logger:  logger,
 	}
 }
+
+func (h *AuthHandler) EnableGoogleOAuth(
+	state *authpkg.OAuthStateManager,
+	google *authpkg.GoogleOAuth,
+	frontendURL string,
+) {
+	h.oauthState = state
+	h.googleOAuth = google
+	h.frontendBaseURL = frontendURL
+}
+
 
 type loginRequest struct {
 	Username string `json:"username" binding:"required"`
