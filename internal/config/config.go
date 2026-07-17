@@ -19,6 +19,14 @@ type LogConfig struct {
 	MaxAgeDays int    `mapstructure:"max_age_days"`
 }
 
+type GoogleOAuthConfig struct {
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	RedirectURL  string `mapstructure:"redirect_url"`
+	StateSecret  string `mapstructure:"state_secret"`
+	FrontendURL  string `mapstructure:"frontend_url"`
+}
+
 type ServerConfig struct {
 	Port                string            `mapstructure:"port"`
 	GatewayPort         string            `mapstructure:"gateway_port"`
@@ -62,13 +70,14 @@ type RateLimitConfig struct {
 }
 
 type Config struct {
-	Server        ServerConfig    `mapstructure:"server"`
-	Log           LogConfig       `mapstructure:"log"`
-	Database      DatabaseConfig  `mapstructure:"database"`
-	Redis         RedisConfig     `mapstructure:"redis"`
-	Auth          AuthConfig      `mapstructure:"auth"`
-	RateLimit     RateLimitConfig `mapstructure:"rate_limit"`
-	AppEnv        string          `mapstructure:"app_env"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Log         LogConfig         `mapstructure:"log"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Redis       RedisConfig       `mapstructure:"redis"`
+	Auth        AuthConfig        `mapstructure:"auth"`
+	GoogleOAuth GoogleOAuthConfig `mapstructure:"google_oauth"`
+	RateLimit   RateLimitConfig   `mapstructure:"rate_limit"`
+	AppEnv      string            `mapstructure:"app_env"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -126,6 +135,11 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.trust_proxy", "TRUST_PROXY")
 	viper.BindEnv("server.prometheus_url", "PROMETHEUS_URL")
 	viper.BindEnv("server.metrics_cache_ttl", "METRICS_CACHE_TTL")
+	viper.BindEnv("google_oauth.client_id", "GOOGLE_CLIENT_ID")
+	viper.BindEnv("google_oauth.client_secret", "GOOGLE_CLIENT_SECRET")
+	viper.BindEnv("google_oauth.redirect_url", "GOOGLE_REDIRECT_URL")
+	viper.BindEnv("google_oauth.state_secret", "OAUTH_STATE_SECRET")
+	viper.BindEnv("google_oauth.frontend_url", "FRONTEND_URL")
 
 	viper.AutomaticEnv()
 
@@ -161,6 +175,17 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.Auth.JWTSecret == "" {
 		return nil, errors.New("JWT secret (JWT_SECRET) is required")
+	}
+	if cfg.GoogleOAuth.ClientID != "" {
+		if cfg.GoogleOAuth.ClientSecret == "" ||
+			cfg.GoogleOAuth.RedirectURL == "" ||
+			cfg.GoogleOAuth.StateSecret == "" {
+			return nil, errors.New("GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL/OAUTH_STATE_SECRET are missing")
+		}
+
+		if len(cfg.GoogleOAuth.StateSecret) < 32 {
+			return nil, errors.New("OAUTH_STATE_SECRET must be at least 32 bytes")
+		}
 	}
 	if cfg.RateLimit.RequestsPerMinute <= 0 {
 		return nil, errors.New("rate_limit.requests_per_minute must be > 0")

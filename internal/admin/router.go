@@ -56,6 +56,23 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
 	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger)
 
+	// Enable Google OAuth if it is configured.
+	if cfg.GoogleOAuth.ClientID != "" {
+		oauthState := auth.NewOAuthStateManager(cfg.GoogleOAuth.StateSecret)
+
+		googleOAuth := auth.NewGoogleOAuth(
+			cfg.GoogleOAuth.ClientID,
+			cfg.GoogleOAuth.ClientSecret,
+			cfg.GoogleOAuth.RedirectURL,
+		)
+
+		authHandler.EnableGoogleOAuth(
+			oauthState,
+			googleOAuth,
+			cfg.GoogleOAuth.FrontendURL,
+		)
+	}
+
 	// Repositories initialized
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
@@ -117,6 +134,13 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	// Public tenant signup.
 	// Used by companies to create their own account.
 	adminGroup.POST("/signup", authHandler.Signup)
+
+	// Public Google OAuth endpoints.
+	// Used to start the Google sign-in flow and handle Google's callback.
+	if cfg.GoogleOAuth.ClientID != "" {
+		adminGroup.GET("/google/login", authHandler.GoogleLogin)
+		adminGroup.GET("/google/callback", authHandler.GoogleCallback)
+	}
 
 	v1 := adminGroup.Group("/v1")
 	v1.Use(middleware.AdminAuth(adminTokens))

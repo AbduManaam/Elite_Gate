@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"elitegate/internal/model"
@@ -31,7 +32,11 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 	SELECT
 		id,
 		username,
+		email,
 		password_hash,
+		google_id,
+		avatar_url,
+		auth_provider,
 		failed_login_attempts,
 		locked_until,
 		last_login_at,
@@ -45,7 +50,11 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 	err := r.db.QueryRowContext(ctx, q, username).Scan(
 		&u.ID,
 		&u.Username,
+		&u.Email,
 		&u.PasswordHash,
+		&u.GoogleID,
+		&u.AvatarURL,
+		&u.AuthProvider,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -71,7 +80,11 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 	SELECT
 		id,
 		username,
+		email,
 		password_hash,
+		google_id,
+		avatar_url,
+		auth_provider,
 		failed_login_attempts,
 		locked_until,
 		last_login_at,
@@ -85,7 +98,11 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
 		&u.ID,
 		&u.Username,
+		&u.Email,
 		&u.PasswordHash,
+		&u.GoogleID,
+		&u.AvatarURL,
+		&u.AuthProvider,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -374,18 +391,22 @@ func (r *AdminAuthRepo) CreateAdminUser(
 ) (*model.AdminUser, error) {
 
 	const q = `
-	INSERT INTO admin_users (username, password_hash, email, is_super_admin)
-	VALUES ($1, $2, $1 || '@elitegate.local', $3)
+	INSERT INTO admin_users (username, password_hash, email, is_super_admin, auth_provider)
+	VALUES ($1, $2, $1 || '@elitegate.local', $3, 'password')
 	ON CONFLICT (username) DO NOTHING
-	RETURNING id, username, password_hash, failed_login_attempts,
-	          locked_until, last_login_at, created_at
+	RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
+	          failed_login_attempts, locked_until, last_login_at, created_at
 	`
 
 	var u model.AdminUser
 	err := r.db.QueryRowContext(ctx, q, username, passwordHash, isSuperAdmin).Scan(
 		&u.ID,
 		&u.Username,
+		&u.Email,
 		&u.PasswordHash,
+		&u.GoogleID,
+		&u.AvatarURL,
+		&u.AuthProvider,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -459,14 +480,15 @@ func (r *AdminAuthRepo) SignupTx(
 	// ── Step 1: Insert admin_user (is_super_admin=FALSE — tenant, not operator) ──
 	var user model.AdminUser
 	const qUser = `
-		INSERT INTO admin_users (username, password_hash, email, is_super_admin)
-		VALUES ($1, $2, $1 || '@elitegate.local', FALSE)
+		INSERT INTO admin_users (username, password_hash, email, is_super_admin, auth_provider)
+		VALUES ($1, $2, $1 || '@elitegate.local', FALSE, 'password')
 		ON CONFLICT (username) DO NOTHING
-		RETURNING id, username, password_hash, failed_login_attempts,
-		          locked_until, last_login_at, created_at
+		RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
+		          failed_login_attempts, locked_until, last_login_at, created_at
 	`
 	err = tx.QueryRowContext(ctx, qUser, username, passwordHash).Scan(
-		&user.ID, &user.Username, &user.PasswordHash,
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
+		&user.GoogleID, &user.AvatarURL, &user.AuthProvider,
 		&user.FailedLoginAttempts, &user.LockedUntil,
 		&user.LastLoginAt, &user.CreatedAt,
 	)
@@ -528,4 +550,129 @@ func (r *AdminAuthRepo) SignupTx(
 	}
 
 	return &SignupResult{User: user, Project: project}, nil
+}
+
+// FindAdminUserByGoogleID — Case A: returning Google user.
+func (r *AdminAuthRepo) FindAdminUserByGoogleID(ctx context.Context, googleID string) (*model.AdminUser, error) {
+	const q = `
+    SELECT id, username, email, password_hash, google_id, avatar_url, auth_provider,
+           failed_login_attempts, locked_until, last_login_at, created_at
+    FROM admin_users WHERE google_id = $1`
+	var u model.AdminUser
+	err := r.db.QueryRowContext(ctx, q, googleID).Scan(
+		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.GoogleID, &u.AvatarURL, &u.AuthProvider,
+		&u.FailedLoginAttempts, &u.LockedUntil, &u.LastLoginAt, &u.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	return &u, err
+}
+
+// FindAdminUserByEmail — Case B lookup (email is CITEXT: case-insensitive already).
+func (r *AdminAuthRepo) FindAdminUserByEmail(ctx context.Context, email string) (*model.AdminUser, error) {
+	const q = `
+    SELECT id, username, email, password_hash, google_id, avatar_url, auth_provider,
+           failed_login_attempts, locked_until, last_login_at, created_at
+    FROM admin_users WHERE email = $1`
+	var u model.AdminUser
+	err := r.db.QueryRowContext(ctx, q, email).Scan(
+		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.GoogleID, &u.AvatarURL, &u.AuthProvider,
+		&u.FailedLoginAttempts, &u.LockedUntil, &u.LastLoginAt, &u.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	return &u, err
+}
+
+// LinkGoogleAccount — Case B: attach a google_id to an existing password account.
+func (r *AdminAuthRepo) LinkGoogleAccount(ctx context.Context, userID, googleID, avatarURL string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE admin_users SET google_id = $2, avatar_url = COALESCE(NULLIF($3, ''), avatar_url)
+         WHERE id = $1`,
+		userID, googleID, avatarURL,
+	)
+	return err
+}
+
+// GoogleSignupTx — Case C: brand-new user via Google. Mirrors SignupTx exactly,
+// but with no password and auth_provider='google'.
+func (r *AdminAuthRepo) GoogleSignupTx(
+	ctx context.Context, email, googleID, displayName, avatarURL, companyName, slug string,
+) (*SignupResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GoogleSignupTx: begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var user model.AdminUser
+	const qUser = `
+        INSERT INTO admin_users (username, email, google_id, avatar_url, auth_provider, is_super_admin)
+        VALUES ($1, $2, $3, $4, 'google', FALSE)
+        ON CONFLICT (email) DO NOTHING
+        RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
+                  failed_login_attempts, locked_until, last_login_at, created_at
+    `
+	// `username` has a UNIQUE NOT NULL constraint; derive one from the email
+	// local-part since Google users never choose one explicitly.
+	err = tx.QueryRowContext(ctx, qUser, usernameFromEmail(email), email, googleID, avatarURL).Scan(
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.GoogleID,
+		&user.AvatarURL, &user.AuthProvider, &user.FailedLoginAttempts,
+		&user.LockedUntil, &user.LastLoginAt, &user.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows // email or derived username collided — caller re-checks by email
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GoogleSignupTx: insert admin_user: %w", err)
+	}
+
+	var project model.Project
+	project.Name, project.OwnerID = companyName, user.ID
+	const qProject = `
+        INSERT INTO projects (name, slug, description, owner_id, plan)
+        VALUES ($1, $2, '', $3, 'free')
+        RETURNING id, is_active, created_at, updated_at`
+	err = tx.QueryRowContext(ctx, qProject, companyName, slug, user.ID).Scan(
+		&project.ID, &project.IsActive, &project.CreatedAt, &project.UpdatedAt,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			retrySlug := slug + "-" + user.ID[:8]
+			if err = tx.QueryRowContext(ctx, qProject, companyName, retrySlug, user.ID).Scan(
+				&project.ID, &project.IsActive, &project.CreatedAt, &project.UpdatedAt,
+			); err != nil {
+				return nil, fmt.Errorf("GoogleSignupTx: insert project retry: %w", err)
+			}
+			project.Slug = retrySlug
+		} else {
+			return nil, fmt.Errorf("GoogleSignupTx: insert project: %w", err)
+		}
+	} else {
+		project.Slug = slug
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO project_members (project_id, admin_user_id, role) VALUES ($1, $2, 'owner')`,
+		project.ID, user.ID,
+	); err != nil {
+		return nil, fmt.Errorf("GoogleSignupTx: insert project_member: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("GoogleSignupTx: commit: %w", err)
+	}
+	return &SignupResult{User: user, Project: project}, nil
+}
+
+// usernameFromEmail derives a username from the email local-part.
+// Example: "abdu.manam@gmail.com" -> "abdu.manam"
+func usernameFromEmail(email string) string {
+	email = strings.ToLower(email)
+
+	parts := strings.SplitN(email, "@", 2)
+
+	return parts[0]
 }

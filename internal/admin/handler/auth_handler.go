@@ -154,8 +154,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	if !user.PasswordHash.Valid {
+		h.limiter.RecordFailure(ip)
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "invalid username or password",
+		})
+		return
+	}
+
 	if bcrypt.CompareHashAndPassword(
-		[]byte(user.PasswordHash),
+		[]byte(user.PasswordHash.String),
 		[]byte(req.Password),
 	) != nil {
 
