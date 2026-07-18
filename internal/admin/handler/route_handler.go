@@ -258,4 +258,3 @@ func (h *RouteHandler) Enable(c *gin.Context) {
 	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to enable route")
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
-

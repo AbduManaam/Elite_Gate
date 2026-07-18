@@ -29,14 +29,14 @@ type ProjectSummary struct {
 // ProjectSummaryMetrics holds every count shown on the dashboard.
 // Visible to any project member (viewer, editor, owner).
 type ProjectSummaryMetrics struct {
-	TotalGateways     int `json:"total_gateways"`
-	TotalRoutes       int `json:"total_routes"`
-	EnabledRoutes     int `json:"enabled_routes"`
-	TotalUpstreams     int `json:"total_upstreams"`
-	EnabledUpstreams   int `json:"enabled_upstreams"`
-	TotalPolicies      int `json:"total_policies"`
-	TotalAPIKeys       int `json:"total_api_keys"`
-	ActiveAPIKeys      int `json:"active_api_keys"`
-	TotalMembers       int `json:"total_members"`
-	TotalAuditLogs4d   int `json:"total_audit_logs_4d"` // capped 4-day window
+	TotalGateways    int `json:"total_gateways"`
+	TotalRoutes      int `json:"total_routes"`
+	EnabledRoutes    int `json:"enabled_routes"`
+	TotalUpstreams   int `json:"total_upstreams"`
+	EnabledUpstreams int `json:"enabled_upstreams"`
+	TotalPolicies    int `json:"total_policies"`
+	TotalAPIKeys     int `json:"total_api_keys"`
+	ActiveAPIKeys    int `json:"active_api_keys"`
+	TotalMembers     int `json:"total_members"`
+	TotalAuditLogs4d int `json:"total_audit_logs_4d"` // capped 4-day window
 }

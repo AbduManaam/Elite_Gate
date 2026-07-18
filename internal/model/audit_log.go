@@ -20,8 +20,8 @@ type AuditLog struct {
 type AuditLogFilter struct {
 	Limit    int
 	Offset   int
-	Actor    string     // matches admin_users.username, partial match
-	Action   string     // exact match against audit_action enum value
+	Actor    string // matches admin_users.username, partial match
+	Action   string // exact match against audit_action enum value
 	DateFrom *time.Time
 	DateTo   *time.Time
 }

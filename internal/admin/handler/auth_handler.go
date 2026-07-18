@@ -72,7 +72,6 @@ func (h *AuthHandler) EnableGoogleOAuth(
 	h.frontendBaseURL = frontendURL
 }
 
-
 type loginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`

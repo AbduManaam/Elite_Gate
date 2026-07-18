@@ -375,7 +375,6 @@ func (r *RouteRepo) Enable(ctx context.Context, id string) error {
 	return nil
 }
 
-
 var (
 	ErrRouteNotFound     = errors.New("route not found")
 	ErrRouteNameConflict = errors.New("route name already exists")

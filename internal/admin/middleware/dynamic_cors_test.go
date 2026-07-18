@@ -34,7 +34,7 @@ func (c *mockCORSDBConn) Prepare(query string) (driver.Stmt, error) {
 	return &mockCORSDBStmt{c.drv, query}, nil
 }
 
-func (c *mockCORSDBConn) Close() error { return nil }
+func (c *mockCORSDBConn) Close() error           { return nil }
 func (mockCORSDBConn) Begin() (driver.Tx, error) { return nil, nil }
 
 type mockCORSDBStmt struct {
@@ -42,7 +42,7 @@ type mockCORSDBStmt struct {
 	query string
 }
 
-func (s *mockCORSDBStmt) Close() error { return nil }
+func (s *mockCORSDBStmt) Close() error  { return nil }
 func (s *mockCORSDBStmt) NumInput() int { return -1 }
 func (s *mockCORSDBStmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.drv.mu.Lock()
@@ -64,7 +64,7 @@ type mockCORSDBRows struct {
 }
 
 func (r *mockCORSDBRows) Columns() []string { return r.columns }
-func (r *mockCORSDBRows) Close() error   { return nil }
+func (r *mockCORSDBRows) Close() error      { return nil }
 func (r *mockCORSDBRows) Next(dest []driver.Value) error {
 	if r.index >= len(r.rows) {
 		return io.EOF
@@ -236,7 +236,7 @@ func TestDynamicCORS(t *testing.T) {
 
 		// Warm cache
 		sendReq("GET", "/admin/v1/projects/proj-alpha/summary", "https://alpha-dash.com")
-		
+
 		// Invalidate
 		originCache.Invalidate("proj-alpha")
 

@@ -514,4 +514,3 @@ func (r *ProjectRepo) UpdateDashboardOrigins(ctx context.Context, projectID stri
 	}
 	return nil
 }
-

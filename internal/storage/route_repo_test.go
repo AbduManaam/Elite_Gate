@@ -46,7 +46,7 @@ type mockRouteDBStmt struct {
 	query string
 }
 
-func (s *mockRouteDBStmt) Close() error { return nil }
+func (s *mockRouteDBStmt) Close() error  { return nil }
 func (s *mockRouteDBStmt) NumInput() int { return -1 }
 
 func (s *mockRouteDBStmt) Query(args []driver.Value) (driver.Rows, error) {
@@ -103,7 +103,7 @@ func TestRouteRepo_Enable_Success(t *testing.T) {
 	routeSqlDrv.mu.Unlock()
 
 	repo := NewRouteRepo(db, zerolog.Nop())
-	
+
 	projectID := uuid.New()
 	userID := uuid.New()
 	tc := TenantContext{
@@ -134,7 +134,7 @@ func TestRouteRepo_Enable_NotFound(t *testing.T) {
 	routeSqlDrv.mu.Unlock()
 
 	repo := NewRouteRepo(db, zerolog.Nop())
-	
+
 	projectID := uuid.New()
 	userID := uuid.New()
 	tc := TenantContext{

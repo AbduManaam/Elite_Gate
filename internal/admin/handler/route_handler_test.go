@@ -50,7 +50,7 @@ type mockRouteHandlerDBStmt struct {
 	query string
 }
 
-func (s *mockRouteHandlerDBStmt) Close() error { return nil }
+func (s *mockRouteHandlerDBStmt) Close() error  { return nil }
 func (s *mockRouteHandlerDBStmt) NumInput() int { return -1 }
 
 func (s *mockRouteHandlerDBStmt) Query(args []driver.Value) (driver.Rows, error) {

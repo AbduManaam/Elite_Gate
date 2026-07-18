@@ -38,7 +38,7 @@ func (c *mockHandlerDBConn) Prepare(query string) (driver.Stmt, error) {
 	return &mockHandlerDBStmt{c.drv, query}, nil
 }
 
-func (c *mockHandlerDBConn) Close() error { return nil }
+func (c *mockHandlerDBConn) Close() error           { return nil }
 func (mockHandlerDBConn) Begin() (driver.Tx, error) { return nil, nil }
 
 type mockHandlerDBStmt struct {
@@ -46,7 +46,7 @@ type mockHandlerDBStmt struct {
 	query string
 }
 
-func (s *mockHandlerDBStmt) Close() error { return nil }
+func (s *mockHandlerDBStmt) Close() error  { return nil }
 func (s *mockHandlerDBStmt) NumInput() int { return -1 }
 func (s *mockHandlerDBStmt) Query(args []driver.Value) (driver.Rows, error) {
 	return nil, io.EOF
@@ -91,12 +91,12 @@ func TestValidateOrigin(t *testing.T) {
 	}{
 		{"https://my-dashboard.com", false},
 		{"http://localhost:5173", false},
-		{"http://127.0.0.1:3000", true}, // http only allowed for hostname starting with localhost
-		{"http://localhost.com", true}, // http allowed for localhost hostname only
-		{"http://my-dashboard.com", true}, // http not allowed
-		{"https://my-dashboard.com/path", true}, // no path allowed
+		{"http://127.0.0.1:3000", true},            // http only allowed for hostname starting with localhost
+		{"http://localhost.com", true},             // http allowed for localhost hostname only
+		{"http://my-dashboard.com", true},          // http not allowed
+		{"https://my-dashboard.com/path", true},    // no path allowed
 		{"https://my-dashboard.com?query=1", true}, // no query allowed
-		{"*", true}, // wildcard disallowed
+		{"*", true},                          // wildcard disallowed
 		{"https://*.my-dashboard.com", true}, // wildcard disallowed
 	}
 
@@ -133,7 +133,7 @@ func TestUpdateDashboardOriginsHandler(t *testing.T) {
 	handlerSqlDrv.mu.Unlock()
 
 	repo := storage.NewProjectRepo(db, zerolog.Nop())
-	
+
 	// Create actual OriginCache, but since we want to spy on it, we can wrap or inspect it.
 	// However, ProjectHandler holds a reference to *middleware.OriginCache.
 	// Since OriginCache's fields are unexported outside middleware, we can create a real OriginCache,
@@ -150,7 +150,7 @@ func TestUpdateDashboardOriginsHandler(t *testing.T) {
 		ctx := context.Background()
 		realCache.Get(ctx, "proj-123") // This will call DB, but it's okay. Let's pre-populate the data directly in test if needed.
 		// Alternatively, just verify that endpoint returns 200 and performs execution.
-		
+
 		body := dashboardOriginsRequest{
 			Origins: []string{"https://my-app.com", "http://localhost:3000"},
 		}
