@@ -2,12 +2,14 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 
 	"elitegate/internal/admin/service"
+	"elitegate/internal/ipfilter"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 )
@@ -30,6 +32,18 @@ type policyRequest struct {
 	AllowedOrigins []string `json:"allowed_origins"`
 	AllowedRoles   []string `json:"allowed_roles"`
 	AllowedScopes  []string `json:"allowed_scopes"`
+	IPAllowlist    []string `json:"ip_allowlist"`
+	IPBlocklist    []string `json:"ip_blocklist"`
+}
+
+func validateIPRules(field string, ips []string) *gin.H {
+	if len(ips) == 0 {
+		return nil
+	}
+	if _, err := ipfilter.NewIPChecker(ips); err != nil {
+		return &gin.H{"error": fmt.Sprintf("invalid IP or CIDR in %s: %s", field, err.Error())}
+	}
+	return nil
 }
 
 func (h *PolicyHandler) Create(c *gin.Context) {
@@ -44,6 +58,15 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if errResp := validateIPRules("allowlist", req.IPAllowlist); errResp != nil {
+		c.JSON(http.StatusBadRequest, *errResp)
+		return
+	}
+	if errResp := validateIPRules("blocklist", req.IPBlocklist); errResp != nil {
+		c.JSON(http.StatusBadRequest, *errResp)
+		return
+	}
+
 	p := &model.Policy{
 		Name:           req.Name,
 		AuthRequired:   req.AuthRequired,
@@ -51,6 +74,8 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		AllowedOrigins: req.AllowedOrigins,
 		AllowedRoles:   req.AllowedRoles,
 		AllowedScopes:  req.AllowedScopes,
+		IPAllowlist:    req.IPAllowlist,
+		IPBlocklist:    req.IPBlocklist,
 	}
 
 	if err := h.policyRepo.Create(c.Request.Context(), p); err != nil {
@@ -64,7 +89,16 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"policy": p})
-	h.auditSvc.Record(c, "policy.create", "policy", p.ID, p.Name, gin.H{"name": p.Name, "auth_required": p.AuthRequired, "rate_limit_rpm": p.RateLimitRPM, "allowed_origins": p.AllowedOrigins, "allowed_roles": p.AllowedRoles, "allowed_scopes": p.AllowedScopes})
+	h.auditSvc.Record(c, "policy.create", "policy", p.ID, p.Name, gin.H{
+		"name":            p.Name,
+		"auth_required":   p.AuthRequired,
+		"rate_limit_rpm":  p.RateLimitRPM,
+		"allowed_origins": p.AllowedOrigins,
+		"allowed_roles":   p.AllowedRoles,
+		"allowed_scopes":  p.AllowedScopes,
+		"ip_allowlist":    p.IPAllowlist,
+		"ip_blocklist":    p.IPBlocklist,
+	})
 }
 
 func (h *PolicyHandler) List(c *gin.Context) {
@@ -125,6 +159,15 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if errResp := validateIPRules("allowlist", req.IPAllowlist); errResp != nil {
+		c.JSON(http.StatusBadRequest, *errResp)
+		return
+	}
+	if errResp := validateIPRules("blocklist", req.IPBlocklist); errResp != nil {
+		c.JSON(http.StatusBadRequest, *errResp)
+		return
+	}
+
 	p := &model.Policy{
 		Name:           req.Name,
 		AuthRequired:   req.AuthRequired,
@@ -132,6 +175,8 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		AllowedOrigins: req.AllowedOrigins,
 		AllowedRoles:   req.AllowedRoles,
 		AllowedScopes:  req.AllowedScopes,
+		IPAllowlist:    req.IPAllowlist,
+		IPBlocklist:    req.IPBlocklist,
 	}
 
 	tc, err := storage.TenantFromContext(c.Request.Context())
@@ -156,7 +201,16 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 
 	p.ID = id
 	h.logger.Info().Str("policy_id", p.ID).Str("name", p.Name).Msg("policy updated successfully")
-	h.auditSvc.Record(c, "policy.update", "policy", id, p.Name, gin.H{"name": p.Name, "auth_required": p.AuthRequired, "rate_limit_rpm": p.RateLimitRPM, "allowed_origins": p.AllowedOrigins, "allowed_roles": p.AllowedRoles, "allowed_scopes": p.AllowedScopes})
+	h.auditSvc.Record(c, "policy.update", "policy", id, p.Name, gin.H{
+		"name":            p.Name,
+		"auth_required":   p.AuthRequired,
+		"rate_limit_rpm":  p.RateLimitRPM,
+		"allowed_origins": p.AllowedOrigins,
+		"allowed_roles":   p.AllowedRoles,
+		"allowed_scopes":  p.AllowedScopes,
+		"ip_allowlist":    p.IPAllowlist,
+		"ip_blocklist":    p.IPBlocklist,
+	})
 	c.JSON(http.StatusOK, gin.H{"policy": p})
 }
 

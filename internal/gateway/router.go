@@ -61,8 +61,8 @@ func NewRouter(
 		dynamic,
 		middleware.RouteMatcher(loader),
 		metrics.Middleware,
+		middleware.IPFilterMiddleware(logger),
 		middleware.CORS,
-		middleware.IPFilter,
 		authMiddleware.Middleware,
 		rlMiddleware.Middleware,
 	)

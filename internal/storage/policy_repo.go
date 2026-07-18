@@ -16,11 +16,11 @@ type PolicyRepo struct {
 	BaseRepo
 }
 
-const selectFields = "id, project_id, name, auth_required, rate_limit_rpm, allowed_origins, allowed_roles, allowed_scopes, created_at, updated_at"
+const selectFields = "id, project_id, name, auth_required, rate_limit_rpm, allowed_origins, allowed_roles, allowed_scopes, ip_allowlist, ip_blocklist, created_at, updated_at"
 
 const insertQ = `
-	INSERT INTO policies (project_id, name, auth_required, rate_limit_rpm, allowed_origins, allowed_roles, allowed_scopes)
-	VALUES ($1, $2, $3, $4, $5, $6, $7)
+	INSERT INTO policies (project_id, name, auth_required, rate_limit_rpm, allowed_origins, allowed_roles, allowed_scopes, ip_allowlist, ip_blocklist)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	RETURNING id, created_at, updated_at
 `
 
@@ -32,6 +32,8 @@ const updateQ = `
 	       allowed_origins = $6,
 	       allowed_roles   = $7,
 	       allowed_scopes  = $8,
+	       ip_allowlist    = $9,
+	       ip_blocklist    = $10,
 	       updated_at      = NOW()
 	WHERE  id = $1
 	   AND project_id = $2
@@ -148,9 +150,11 @@ func (r *PolicyRepo) Create(ctx context.Context, p *model.Policy) error {
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
-			pq.Array(allowedOrigins),
+			pq.Array(helper.OrEmpty(p.AllowedOrigins)),
 			pq.Array(helper.OrEmpty(p.AllowedRoles)),
 			pq.Array(helper.OrEmpty(p.AllowedScopes)),
+			pq.Array(helper.OrEmpty(p.IPAllowlist)),
+			pq.Array(helper.OrEmpty(p.IPBlocklist)),
 		).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 
 		if err != nil {
@@ -184,9 +188,11 @@ func (r *PolicyRepo) Update(ctx context.Context, id string, p *model.Policy) err
 			p.Name,
 			p.AuthRequired,
 			p.RateLimitRPM,
-			pq.Array(allowedOrigins),
+			pq.Array(helper.OrEmpty(p.AllowedOrigins)),
 			pq.Array(helper.OrEmpty(p.AllowedRoles)),
 			pq.Array(helper.OrEmpty(p.AllowedScopes)),
+			pq.Array(helper.OrEmpty(p.IPAllowlist)),
+			pq.Array(helper.OrEmpty(p.IPBlocklist)),
 		).Scan(&p.UpdatedAt)
 
 		if errors.Is(err, sql.ErrNoRows) {
@@ -263,6 +269,8 @@ func scanPolicy(s policyScanner) (model.Policy, error) {
 		pq.Array(&p.AllowedOrigins),
 		pq.Array(&p.AllowedRoles),
 		pq.Array(&p.AllowedScopes),
+		pq.Array(&p.IPAllowlist),
+		pq.Array(&p.IPBlocklist),
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)

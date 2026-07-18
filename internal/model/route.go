@@ -20,6 +20,8 @@ type Route struct {
 	AllowedOrigins []string  `json:"allowed_origins"`
 	AllowedRoles   []string  `json:"allowed_roles"`
 	AllowedScopes  []string  `json:"allowed_scopes"`
+	IPAllowlist    []string  `json:"ip_allowlist"`
+	IPBlocklist    []string  `json:"ip_blocklist"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

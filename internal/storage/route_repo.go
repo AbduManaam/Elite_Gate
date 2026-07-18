@@ -39,6 +39,8 @@ const listQuery = `
 		COALESCE(p.allowed_origins, '{}') AS allowed_origins,
 		COALESCE(p.allowed_roles,   '{}') AS allowed_roles,
 		COALESCE(p.allowed_scopes,  '{}') AS allowed_scopes,
+		COALESCE(p.ip_allowlist,    '{}') AS ip_allowlist,
+		COALESCE(p.ip_blocklist,    '{}') AS ip_blocklist,
 		r.created_at,
 		r.updated_at
 	FROM   routes r
@@ -287,6 +289,8 @@ func scanRoute(s rowScanner) (model.Route, error) {
 		pq.Array(&rt.AllowedOrigins),
 		pq.Array(&rt.AllowedRoles),
 		pq.Array(&rt.AllowedScopes),
+		pq.Array(&rt.IPAllowlist),
+		pq.Array(&rt.IPBlocklist),
 		&rt.CreatedAt,
 		&rt.UpdatedAt,
 	)

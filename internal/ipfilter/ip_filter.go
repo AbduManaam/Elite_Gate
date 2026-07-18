@@ -3,6 +3,7 @@ package ipfilter
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 )
 
@@ -78,4 +79,13 @@ func (c *IPChecker) IsAllowed(ipStr string) bool {
 
 func (c *IPChecker) IsBlocked(ipStr string) bool {
 	return c.IsAllowed(ipStr)
+}
+
+// RuleSetKey produces a stable cache key for a list of IP/CIDR patterns,
+// independent of input order.
+func RuleSetKey(rules []string) string {
+	sorted := make([]string, len(rules))
+	copy(sorted, rules)
+	sort.Strings(sorted)
+	return strings.Join(sorted, ",")
 }
