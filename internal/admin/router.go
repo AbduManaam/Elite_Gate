@@ -54,7 +54,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	}
 	authRepo := storage.NewAdminAuthRepo(db)
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
-	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger)
+	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger, cfg.AppEnv == "production")
 
 	// Enable Google OAuth if it is configured.
 	if cfg.GoogleOAuth.ClientID != "" {

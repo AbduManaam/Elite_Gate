@@ -5,9 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"time"
+	"strconv"
 
-	adminmw "elitegate/internal/admin/middleware"
 	authpkg "elitegate/internal/auth"
 	"elitegate/internal/model"
 
@@ -91,21 +90,8 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	access, err := h.tokens.CreateAdminAccessToken(user.ID, user.Username)
+	tokens, err := h.issueTokensForUser(c, user.ID, user.Username)
 	if err != nil {
-		h.internal(c, err)
-		return
-	}
-	refresh, err := authpkg.GenerateRefreshToken()
-	if err != nil {
-		h.internal(c, err)
-		return
-	}
-	exp := time.Now().Add(authpkg.RefreshTokenTTL)
-	if err := h.repo.CreateRefreshToken(
-		c.Request.Context(), user.ID, authpkg.HashToken(refresh), exp,
-		adminmw.ClientIP(c), c.Request.UserAgent(),
-	); err != nil {
 		h.internal(c, err)
 		return
 	}
@@ -114,10 +100,9 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 
 	redirectURL := frontendURL + "/oauth/callback#" +
 		url.Values{
-			"access_token":  {access},
-			"refresh_token": {refresh},
-			"expires_in":    {"900"},
-			"token_type":    {"Bearer"},
+			"access_token": {tokens.AccessToken},
+			"expires_in":   {strconv.Itoa(tokens.ExpiresIn)},
+			"token_type":   {"Bearer"},
 		}.Encode()
 
 	c.Redirect(http.StatusFound, redirectURL)

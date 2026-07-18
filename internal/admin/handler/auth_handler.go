@@ -42,6 +42,8 @@ type AuthHandler struct {
 	oauthState      *authpkg.OAuthStateManager
 	googleOAuth     *authpkg.GoogleOAuth
 	frontendBaseURL string
+
+	secureCookies bool
 }
 
 func NewAuthHandler(
@@ -49,12 +51,14 @@ func NewAuthHandler(
 	tokens *authpkg.AdminTokenManager,
 	limiter *adminmw.LoginRateLimiter,
 	logger zerolog.Logger,
+	secureCookies bool,
 ) *AuthHandler {
 	return &AuthHandler{
-		repo:    repo,
-		tokens:  tokens,
-		limiter: limiter,
-		logger:  logger,
+		repo:          repo,
+		tokens:        tokens,
+		limiter:       limiter,
+		logger:        logger,
+		secureCookies: secureCookies,
 	}
 }
 
@@ -74,15 +78,10 @@ type loginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token" binding:"required"`
-}
-
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	TokenType    string `json:"token_type"`
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	TokenType   string `json:"token_type"`
 }
 
 // registerRequest is the body for POST /admin/register and POST /admin/v1/admins.
@@ -107,11 +106,10 @@ type signupRequest struct {
 
 // signupResponse is returned after a successful self-service signup.
 type signupResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	TokenType    string `json:"token_type"`
-	ProjectID    string `json:"project_id"`
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	TokenType   string `json:"token_type"`
+	ProjectID   string `json:"project_id"`
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -221,59 +219,52 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	h.issueTokens(c, user.ID, user.Username)
+	tokens, err := h.issueTokensForUser(c, user.ID, user.Username)
+	if err != nil {
+		h.internal(c, err)
+		return
+	}
+
+	h.logger.Info().
+		Str("admin_user_id", user.ID).
+		Msg("admin login success")
+
+	c.JSON(http.StatusOK, tokenResponse{
+		AccessToken: tokens.AccessToken,
+		ExpiresIn:   tokens.ExpiresIn,
+		TokenType:   "Bearer",
+	})
 }
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(
-		c.Writer,
-		c.Request.Body,
-		maxAuthBodyBytes,
-	)
-
-	var req refreshRequest
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid request",
-		})
+	rawToken, err := readRefreshCookie(c)
+	if err != nil || rawToken == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing refresh token"})
 		return
 	}
 
-	oldHash := authpkg.HashToken(req.RefreshToken)
+	oldHash := authpkg.HashToken(rawToken)
 
-	token, err := h.repo.FindRefreshToken(
-		c.Request.Context(),
-		oldHash,
-	)
-
+	token, err := h.repo.FindRefreshToken(c.Request.Context(), oldHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "invalid refresh token",
-		})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
 		return
 	}
-
 	if err != nil {
 		h.internal(c, err)
 		return
 	}
 
 	if token.RevokedAt.Valid {
-		h.logger.Warn().
-			Str("admin_user_id", token.AdminUserID).
-			Msg("revoked refresh token reused")
-
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "invalid refresh token",
-		})
+		h.logger.Warn().Str("admin_user_id", token.AdminUserID).Msg("revoked refresh token reused")
+		clearRefreshCookie(c, h.secureCookies)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
 		return
 	}
 
 	if time.Now().After(token.ExpiresAt) {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "refresh token expired",
-		})
+		clearRefreshCookie(c, h.secureCookies)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token expired"})
 		return
 	}
 
@@ -286,116 +277,44 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	newHash := authpkg.HashToken(newRaw)
 	newExp := time.Now().Add(authpkg.RefreshTokenTTL)
 
-	ip := adminmw.ClientIP(c)
-	ua := c.Request.UserAgent()
-
 	if err := h.repo.RotateRefreshToken(
-		c.Request.Context(),
-		oldHash,
-		newHash,
-		token.AdminUserID,
-		newExp,
-		ip,
-		ua,
+		c.Request.Context(), oldHash, newHash, token.AdminUserID, newExp,
+		adminmw.ClientIP(c), c.Request.UserAgent(),
 	); err != nil {
 		h.internal(c, err)
 		return
 	}
 
-	user, err := h.repo.FindAdminUserByID(
-		c.Request.Context(),
-		token.AdminUserID,
-	)
+	user, err := h.repo.FindAdminUserByID(c.Request.Context(), token.AdminUserID)
 	if err != nil {
 		h.internal(c, err)
 		return
 	}
 
-	access, err := h.tokens.CreateAdminAccessToken(
-		token.AdminUserID,
-		user.Username,
-	)
-
+	access, err := h.tokens.CreateAdminAccessToken(token.AdminUserID, user.Username)
 	if err != nil {
 		h.internal(c, err)
 		return
 	}
+
+	setRefreshCookie(c, newRaw, h.secureCookies)
 
 	c.JSON(http.StatusOK, tokenResponse{
-		AccessToken:  access,
-		RefreshToken: newRaw,
-		ExpiresIn:    int(authpkg.AccessTokenTTL.Seconds()),
-		TokenType:    "Bearer",
+		AccessToken: access,
+		ExpiresIn:   int(authpkg.AccessTokenTTL.Seconds()),
+		TokenType:   "Bearer",
 	})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(
-		c.Writer,
-		c.Request.Body,
-		maxAuthBodyBytes,
-	)
-
-	var req refreshRequest
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid request",
-		})
-		return
+	rawToken, err := readRefreshCookie(c)
+	if err == nil && rawToken != "" {
+		_ = h.repo.RevokeRefreshToken(c.Request.Context(), authpkg.HashToken(rawToken))
 	}
 
-	_ = h.repo.RevokeRefreshToken(
-		c.Request.Context(),
-		authpkg.HashToken(req.RefreshToken),
-	)
+	clearRefreshCookie(c, h.secureCookies)
 
-	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
-	})
-}
-
-func (h *AuthHandler) issueTokens(
-	c *gin.Context,
-	userID,
-	username string,
-) {
-	access, err := h.tokens.CreateAdminAccessToken(userID, username)
-	if err != nil {
-		h.internal(c, err)
-		return
-	}
-
-	refresh, err := authpkg.GenerateRefreshToken()
-	if err != nil {
-		h.internal(c, err)
-		return
-	}
-
-	exp := time.Now().Add(authpkg.RefreshTokenTTL)
-
-	if err := h.repo.CreateRefreshToken(
-		c.Request.Context(),
-		userID,
-		authpkg.HashToken(refresh),
-		exp,
-		adminmw.ClientIP(c),
-		c.Request.UserAgent(),
-	); err != nil {
-		h.internal(c, err)
-		return
-	}
-
-	h.logger.Info().
-		Str("admin_user_id", userID).
-		Msg("admin login success")
-
-	c.JSON(http.StatusOK, tokenResponse{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		ExpiresIn:    int(authpkg.AccessTokenTTL.Seconds()),
-		TokenType:    "Bearer",
-	})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // Register handles admin account creation.
@@ -555,38 +474,18 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		Msg("new tenant self-registered via /signup")
 
 	// ── Issue tokens — company is live immediately ───────────────────────
-	access, err := h.tokens.CreateAdminAccessToken(result.User.ID, result.User.Username)
+	tokens, err := h.issueTokensForUser(c, result.User.ID, result.User.Username)
 	if err != nil {
-		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: access token generation failed")
-		h.internal(c, err)
-		return
-	}
-	refresh, err := authpkg.GenerateRefreshToken()
-	if err != nil {
-		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: refresh token generation failed")
-		h.internal(c, err)
-		return
-	}
-	exp := time.Now().Add(authpkg.RefreshTokenTTL)
-	if err := h.repo.CreateRefreshToken(
-		c.Request.Context(),
-		result.User.ID,
-		authpkg.HashToken(refresh),
-		exp,
-		adminmw.ClientIP(c),
-		c.Request.UserAgent(),
-	); err != nil {
-		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: refresh token persistence failed")
+		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: token issuance failed")
 		h.internal(c, err)
 		return
 	}
 
 	c.JSON(http.StatusCreated, signupResponse{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		ExpiresIn:    int(authpkg.AccessTokenTTL.Seconds()),
-		TokenType:    "Bearer",
-		ProjectID:    result.Project.ID,
+		AccessToken: tokens.AccessToken,
+		ExpiresIn:   tokens.ExpiresIn,
+		TokenType:   "Bearer",
+		ProjectID:   result.Project.ID,
 	})
 }
 

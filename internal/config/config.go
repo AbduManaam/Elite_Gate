@@ -145,15 +145,15 @@ func LoadConfig() (*Config, error) {
 
 	var cfg Config
 
+	if err := viper.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
 	if allowlistRaw := os.Getenv("ADMIN_IP_ALLOWLIST"); allowlistRaw != "" {
 		cfg.Server.AdminIPAllowlist = strings.Split(allowlistRaw, ",")
 		for i, v := range cfg.Server.AdminIPAllowlist {
 			cfg.Server.AdminIPAllowlist[i] = strings.TrimSpace(v)
 		}
-	}
-
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	if hostMapRaw := os.Getenv("GATEWAY_HOST_MAP"); hostMapRaw != "" {
