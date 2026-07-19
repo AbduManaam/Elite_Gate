@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -82,15 +83,25 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	auditLogRepo := storage.NewAuditLogRepo(db, logger)
 	gatewayRepo := storage.NewGatewayRepo(db)
 
+	// Services initialized
 	auditSvc := service.NewAuditService(auditLogRepo, logger)
+	projectSvc := service.NewProjectService(projectRepo, originCache, logger)
+	routeSvc := service.NewRouteService(routeRepo, logger)
+	upstreamSvc := service.NewUpstreamService(upstreamRepo, upstreamTargetRepo, logger)
+	policySvc := service.NewPolicyService(policyRepo, routeRepo, logger)
+	apiKeySvc := service.NewApiKeyService(apiKeyRepo, logger)
+	membershipRepo := storage.NewMembershipRepo(db, logger)
+	membershipSvc := service.NewMembershipService(membershipRepo, logger)
+	membershipHandler := handler.NewMembershipHandler(membershipSvc, logger, auditSvc)
+	platformSvc := service.NewPlatformService(projectRepo, gatewayRepo, authRepo, logger)
 
 	// Handlers initialized
-	routeHandler := handler.NewRouteHandler(routeRepo, logger, auditSvc)
-	upstreamHandler := handler.NewUpstreamHandler(upstreamRepo, logger, auditSvc)
-	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamTargetRepo, logger, auditSvc)
-	policyHandler := handler.NewPolicyHandler(policyRepo, routeRepo, logger, auditSvc)
-	projectHandler := handler.NewProjectHandler(projectRepo, originCache, logger)
-	apiKeyHandler := handler.NewApiKeyHandler(apiKeyRepo, logger, auditSvc)
+	routeHandler := handler.NewRouteHandler(routeSvc, logger, auditSvc)
+	upstreamHandler := handler.NewUpstreamHandler(upstreamSvc, logger, auditSvc)
+	upstreamTargetHandler := handler.NewUpstreamTargetHandler(upstreamSvc, logger, auditSvc)
+	policyHandler := handler.NewPolicyHandler(policySvc, logger, auditSvc)
+	projectHandler := handler.NewProjectHandler(projectSvc, logger)
+	apiKeyHandler := handler.NewApiKeyHandler(apiKeySvc, logger, auditSvc)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
 	drainTimeout, err := time.ParseDuration(cfg.Server.DrainTimeout)
 	if err != nil {
@@ -99,7 +110,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	gatewayHandler := handler.NewGatewayHandler(gatewayRepo, containerMgr, drainTimeout)
 	syncHandler := handler.NewSyncHandler(gatewayRepo, logger)
 	platformHandler := handler.NewPlatformHandler(
-		projectRepo, gatewayRepo, authRepo, containerMgr, syncHandler, logger,
+		platformSvc, gatewayRepo, containerMgr, syncHandler, logger,
 	)
 	promClient := promclient.NewClient(cfg.Server.PrometheusURL, 5*time.Second)
 	metricsCacheTTL, err := time.ParseDuration(cfg.Server.MetricsCacheTTL)
@@ -146,9 +157,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	v1.Use(middleware.AdminAuth(adminTokens))
 	v1.GET("/me", authHandler.Me)
 	{
-		membershipRepo := storage.NewMembershipRepo(db, logger)
-		membershipHandler := handler.NewMembershipHandler(membershipRepo, logger, auditSvc)
 		userLookupLimiter := ratelimit.NewMemoryLimiter(20) // 20 lookups/min per caller
+		userLookupLimiter.StartCleanup(context.Background(), time.Minute)
 		userLookupLimit := middleware.UserLookupRateLimit(userLookupLimiter, 20)
 
 		// Project Management

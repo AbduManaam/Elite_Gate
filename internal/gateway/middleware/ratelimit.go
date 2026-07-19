@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"time"
 
 	"elitegate/internal/model"
 	"elitegate/internal/ratelimit"
@@ -42,24 +41,19 @@ func (rl *RateLimitMiddleware) Middleware(next http.Handler) http.Handler {
 
 		key := fmt.Sprintf("%s:%s", clientID, r.URL.Path)
 
-		current := rl.limiter.Count(key)
-		remaining := limit - current
-		if remaining < 0 {
-			remaining = 0
-		}
-		resetAt := nextWindowReset()
+		result := rl.limiter.CheckAndConsume(key, limit)
 
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
-		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetAt.Unix()))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", result.Remaining))
+		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", result.ResetAt.Unix()))
 
-		if !rl.limiter.AllowWithLimit(key, limit) {
+		if !result.Allowed {
 			w.Header().Set("Retry-After", "60")
 			httpJSON(w, http.StatusTooManyRequests, map[string]any{
 				"error":       "rate limit exceeded",
 				"limit":       limit,
 				"retry_after": 60,
-				"reset_at":    resetAt.Unix(),
+				"reset_at":    result.ResetAt.Unix(),
 			})
 			return
 		}
@@ -74,9 +68,4 @@ func extractIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return ip
-}
-
-func nextWindowReset() time.Time {
-	now := time.Now()
-	return now.Truncate(time.Minute).Add(time.Minute)
 }
