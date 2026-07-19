@@ -285,4 +285,5 @@ func scanPolicy(s policyScanner) (model.Policy, error) {
 var (
 	ErrPolicyNotFound     = errors.New("policy not found")
 	ErrPolicyNameConflict = errors.New("policy name already exists")
+	ErrPolicyInUse        = errors.New("policy is attached to active routes and cannot be deleted")
 )

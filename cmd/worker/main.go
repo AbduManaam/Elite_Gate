@@ -30,7 +30,7 @@ func main() {
 	defer db.Close()
 
 	containerMgr, err := container.NewDockerContainerManager(
-		cfg.Database.DSN, cfg.Redis.Addr, cfg.Auth.JWTSecret, "",
+		cfg.Database.DSN, cfg.Database.GatewayDSN, cfg.Redis.Addr, cfg.Auth.JWTSecret, "",
 	)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to init container manager")

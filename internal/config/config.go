@@ -44,6 +44,7 @@ type ServerConfig struct {
 	DevHostMap          map[string]string `mapstructure:"dev_host_map"`
 	AdminIPAllowlist    []string          `mapstructure:"admin_ip_allowlist"`
 	TrustProxy          bool              `mapstructure:"trust_proxy"`
+	TrustProxyHeaders   bool              `mapstructure:"trust_proxy_headers"`
 	AllowedOrigins      []string          `mapstructure:"allowed_origins"`
 	PrometheusURL       string            `mapstructure:"prometheus_url"`
 	MetricsCacheTTL     string            `mapstructure:"metrics_cache_ttl"`
@@ -51,6 +52,7 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	DSN          string `mapstructure:"dsn"`
+	GatewayDSN   string `mapstructure:"gateway_dsn"`
 	MaxOpenConns int    `mapstructure:"max_open_conns"`
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 }
@@ -65,8 +67,16 @@ type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
 }
 
+type AuthRateLimitConfig struct {
+	LoginRPM         int `mapstructure:"login_rpm"`
+	RefreshRPM       int `mapstructure:"refresh_rpm"`
+	OAuthCallbackRPM int `mapstructure:"oauth_callback_rpm"`
+	SignupRPM        int `mapstructure:"signup_rpm"`
+}
+
 type RateLimitConfig struct {
-	RequestsPerMinute int `mapstructure:"requests_per_minute"`
+	RequestsPerMinute int                 `mapstructure:"requests_per_minute"`
+	Auth              AuthRateLimitConfig `mapstructure:"auth"`
 }
 
 type Config struct {
@@ -103,7 +113,12 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("server.drain_stale_after", "2m")
 	viper.SetDefault("server.grpc_gateway_port", ":50051")
 	viper.SetDefault("server.route_reload_interval", "10s")
+	viper.SetDefault("server.trust_proxy_headers", false)
 	viper.SetDefault("rate_limit.requests_per_minute", 100)
+	viper.SetDefault("rate_limit.auth.login_rpm", 15)
+	viper.SetDefault("rate_limit.auth.refresh_rpm", 30)
+	viper.SetDefault("rate_limit.auth.oauth_callback_rpm", 10)
+	viper.SetDefault("rate_limit.auth.signup_rpm", 5)
 	viper.SetDefault("app_env", "development")
 
 	// 3. Read the YAML configuration file if it exists
@@ -115,6 +130,7 @@ func LoadConfig() (*Config, error) {
 
 	// 4. Bind env overrides (takes precedence over yaml configs)
 	viper.BindEnv("database.dsn", "POSTGRES_DSN")
+	viper.BindEnv("database.gateway_dsn", "POSTGRES_GATEWAY_DSN")
 	viper.BindEnv("redis.addr", "REDIS_ADDR")
 	viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	viper.BindEnv("server.gateway_port", "GATEWAY_PORT")
@@ -133,6 +149,11 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("app_env", "APP_ENV")
 	viper.BindEnv("server.project_id", "PROJECT_ID")
 	viper.BindEnv("server.trust_proxy", "TRUST_PROXY")
+	viper.BindEnv("server.trust_proxy_headers", "TRUST_PROXY_HEADERS")
+	viper.BindEnv("rate_limit.auth.login_rpm", "RATE_LIMIT_AUTH_LOGIN_RPM")
+	viper.BindEnv("rate_limit.auth.refresh_rpm", "RATE_LIMIT_AUTH_REFRESH_RPM")
+	viper.BindEnv("rate_limit.auth.oauth_callback_rpm", "RATE_LIMIT_AUTH_OAUTH_CALLBACK_RPM")
+	viper.BindEnv("rate_limit.auth.signup_rpm", "RATE_LIMIT_AUTH_SIGNUP_RPM")
 	viper.BindEnv("server.prometheus_url", "PROMETHEUS_URL")
 	viper.BindEnv("server.metrics_cache_ttl", "METRICS_CACHE_TTL")
 	viper.BindEnv("google_oauth.client_id", "GOOGLE_CLIENT_ID")

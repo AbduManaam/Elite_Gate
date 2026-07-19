@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"elitegate/helper"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -35,11 +37,15 @@ func NewRedisKeyStore(rdb *redis.Client, db KeyRepository) *RedisKeyStore {
 
 // Validate checks Redis first, falls back to PostgreSQL on miss.
 func (s *RedisKeyStore) Validate(key string) (*APIKeyRecord, bool) {
-	ctx := context.Background()
-	keyHash := hashKey(key)
-	cacheKey := keyPrefix + keyHash
+	return s.ValidateWithContext(context.Background(), key)
+}
 
-	//Checking if API key is available in Redis cache
+// ValidateWithContext checks Redis first using the request context, falling back to PostgreSQL on miss.
+func (s *RedisKeyStore) ValidateWithContext(ctx context.Context, key string) (*APIKeyRecord, bool) {
+	keyHash := hashKey(key)
+	cacheKey := helper.PrefixedKey(keyPrefix + keyHash)
+
+	// Checking if API key is available in Redis cache
 	if s.redis != nil {
 		data, err := s.redis.Get(ctx, cacheKey).Result()
 		if err == nil {
@@ -54,7 +60,7 @@ func (s *RedisKeyStore) Validate(key string) (*APIKeyRecord, bool) {
 		return nil, false
 	}
 
-	// Fallback to here, when Redis cache is not available, to check api key availability in postgresql database
+	// Fallback to check api key availability in postgresql database
 	record, err := s.db.FindByHash(ctx, keyHash)
 	if err != nil || record == nil {
 		return nil, false

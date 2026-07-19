@@ -12,6 +12,7 @@ import (
 	"elitegate/helper"
 	"elitegate/internal/auth"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -365,14 +366,37 @@ func (r *ApiKeyRepo) ListAll(ctx context.Context, limit, offset int) ([]ApiKeyRe
 // Global API key lookup (bypasses tenant RLS)─────────────────────────────────────────
 
 // Find an active API key by its hash.
-// Used during authentication before the tenant is identified.
+// Used during authentication. If TenantContext is present in ctx,
+// it executes within a tenant-scoped transaction (enforcing RLS).
 func (r *ApiKeyRepo) FindByHash(
 	ctx context.Context,
 	hash string,
 ) (*auth.APIKeyRecord, error) {
+	tc, err := TenantFromContext(ctx)
+	if err == nil && tc.ProjectID != uuid.Nil {
+		var rec *auth.APIKeyRecord
+		txErr := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+			res, e := r.findByHashQuery(ctx, tx, hash)
+			rec = res
+			return e
+		})
+		return rec, txErr
+	}
+	return r.findByHashQuery(ctx, r.db, hash)
+}
+
+type queryRowContexter interface {
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+func (r *ApiKeyRepo) findByHashQuery(
+	ctx context.Context,
+	qRunner queryRowContexter,
+	hash string,
+) (*auth.APIKeyRecord, error) {
 	r.logger.Debug().
 		Str("hash_prefix", helper.SafePrefix(hash, 8)).
-		Msg("FindByHash: global api_key lookup")
+		Msg("FindByHash: api_key lookup")
 
 	const q = `
 		SELECT project_id::text, status, roles, scopes, expires_at, deleted_at
@@ -389,7 +413,7 @@ func (r *ApiKeyRepo) FindByHash(
 		deletedAt sql.NullTime
 	)
 
-	err := r.db.QueryRowContext(ctx, q, hash).
+	err := qRunner.QueryRowContext(ctx, q, hash).
 		Scan(&projectID, &status, pq.Array(&roles), pq.Array(&scopes), &expiresAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		r.logger.Debug().

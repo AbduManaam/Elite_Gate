@@ -1,26 +1,27 @@
 package handler
 
 import (
+	"errors"
+	"net/http"
+
+	"elitegate/helper"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
-	"errors"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
 type RouteHandler struct {
-	repo     *storage.RouteRepo
+	svc      *service.RouteService
 	auditSvc *service.AuditService
 	logger   zerolog.Logger
 }
 
-// Receive route-related HTTP requests, call the repository to perform database operations, and return HTTP responses.
-func NewRouteHandler(repo *storage.RouteRepo, logger zerolog.Logger, auditSvc *service.AuditService) *RouteHandler {
+func NewRouteHandler(svc *service.RouteService, logger zerolog.Logger, auditSvc *service.AuditService) *RouteHandler {
 	return &RouteHandler{
-		repo:     repo,
+		svc:      svc,
 		auditSvc: auditSvc,
 		logger:   logger,
 	}
@@ -33,10 +34,9 @@ func (h *RouteHandler) List(c *gin.Context) {
 		return
 	}
 
-	routes, total, err := h.repo.ListAll(c.Request.Context(), limit, offset)
+	routes, total, err := h.svc.ListRoutes(c.Request.Context(), limit, offset)
 	if err != nil {
-		h.logger.Debug().Err(err).Str("handler", "ListRoutes").Msg("failed to list routes")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load routes"})
+		helper.RespondInternalError(c, h.logger, err, "failed to load routes")
 		return
 	}
 
@@ -46,9 +46,6 @@ func (h *RouteHandler) List(c *gin.Context) {
 	})
 }
 
-// createRouteRequest is the API contract for creating or updating a route.
-// upstream_id and policy_id reference the normalized tables.
-// methods replaces the old TEXT[] column — each entry becomes a row in route_methods.
 type createRouteRequest struct {
 	Name       string   `json:"name"        binding:"required"`
 	Path       string   `json:"path"        binding:"required"`
@@ -58,8 +55,6 @@ type createRouteRequest struct {
 	MatchType  string   `json:"match_type"`
 	Enabled    bool     `json:"enabled"`
 }
-
-var validMatchTypes = map[string]bool{"exact": true, "prefix": true}
 
 func (h *RouteHandler) Create(c *gin.Context) {
 	var req createRouteRequest
@@ -75,44 +70,17 @@ func (h *RouteHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if req.MatchType == "" {
-		req.MatchType = "prefix"
-	}
-	if !validMatchTypes[req.MatchType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "match_type must be 'exact' or 'prefix'"})
-		return
-	}
-
-	var policyID *string
-	var policyIDStr string
-	if req.PolicyID != nil && *req.PolicyID != "" {
-		policyID = req.PolicyID
-		policyIDStr = *req.PolicyID
-	}
-
-	rt := &model.Route{
-		Name:       req.Name,
-		Path:       req.Path,
-		UpstreamID: &req.UpstreamID,
-		PolicyID:   policyID,
-		Methods:    req.Methods,
-		MatchType:  req.MatchType,
-		Enabled:    req.Enabled,
-	}
-
-	h.logger.Info().
-		Str("path", rt.Path).
-		Str("upstream_id", req.UpstreamID).
-		Str("policy_id", policyIDStr).
-		Msg("creating route in database")
-
-	if err := h.repo.Create(c.Request.Context(), rt); err != nil {
+	rt, err := h.svc.CreateRoute(c.Request.Context(), req.Name, req.Path, req.UpstreamID, req.PolicyID, req.Methods, req.MatchType, req.Enabled)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidMatchType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		if errors.Is(err, storage.ErrRouteNameConflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "route name already exists"})
 			return
 		}
-		h.logger.Error().Err(err).Str("path", rt.Path).Msg("failed to create route")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("path", req.Path).Logger(), err, "internal server error")
 		return
 	}
 
@@ -130,7 +98,7 @@ func (h *RouteHandler) Delete(c *gin.Context) {
 
 	h.logger.Info().Str("route_id", id).Msg("deleting route")
 
-	err := h.repo.Delete(c.Request.Context(), id)
+	err := h.svc.DeleteRoute(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route deleted")
 		h.auditSvc.Record(c, "route.delete", "route", id, "", nil)
@@ -143,8 +111,7 @@ func (h *RouteHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to delete route")
-	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	helper.RespondInternalError(c, h.logger.With().Str("route_id", id).Logger(), err, "internal server error")
 }
 
 func (h *RouteHandler) Update(c *gin.Context) {
@@ -163,42 +130,17 @@ func (h *RouteHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if req.MatchType == "" {
-		req.MatchType = "prefix"
-	}
-	if !validMatchTypes[req.MatchType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "match_type must be 'exact' or 'prefix'"})
-		return
-	}
-
-	var policyID *string
-	if req.PolicyID != nil && *req.PolicyID != "" {
-		policyID = req.PolicyID
-	}
-
-	rt := &model.Route{
-		Name:       req.Name,
-		Path:       req.Path,
-		UpstreamID: &req.UpstreamID,
-		PolicyID:   policyID,
-		Methods:    req.Methods,
-		MatchType:  req.MatchType,
-		Enabled:    req.Enabled,
-	}
-
-	h.logger.Info().
-		Str("route_id", id).
-		Str("path", rt.Path).
-		Str("upstream_id", req.UpstreamID).
-		Msg("updating route in database")
-
-	if err := h.repo.Update(c.Request.Context(), id, rt); err != nil {
+	rt, err := h.svc.UpdateRoute(c.Request.Context(), id, req.Name, req.Path, req.UpstreamID, req.PolicyID, req.Methods, req.MatchType, req.Enabled)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidMatchType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		if errors.Is(err, storage.ErrRouteNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
 			return
 		}
-		h.logger.Error().Err(err).Str("route_id", id).Msg("failed to update route")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("route_id", id).Logger(), err, "internal server error")
 		return
 	}
 
@@ -216,7 +158,7 @@ func (h *RouteHandler) Disable(c *gin.Context) {
 
 	h.logger.Info().Str("route_id", id).Msg("disabling route")
 
-	err := h.repo.Disable(c.Request.Context(), id)
+	err := h.svc.DisableRoute(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route disabled successfully")
 		h.auditSvc.Record(c, "route.update", "route", id, "", gin.H{"enabled": false})
@@ -229,8 +171,7 @@ func (h *RouteHandler) Disable(c *gin.Context) {
 		return
 	}
 
-	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to disable route")
-	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	helper.RespondInternalError(c, h.logger.With().Str("route_id", id).Logger(), err, "internal server error")
 }
 
 func (h *RouteHandler) Enable(c *gin.Context) {
@@ -242,7 +183,7 @@ func (h *RouteHandler) Enable(c *gin.Context) {
 
 	h.logger.Info().Str("route_id", id).Msg("enabling route")
 
-	err := h.repo.Enable(c.Request.Context(), id)
+	err := h.svc.EnableRoute(c.Request.Context(), id)
 	if err == nil {
 		h.logger.Info().Str("route_id", id).Msg("route enabled successfully")
 		h.auditSvc.Record(c, "route.update", "route", id, "", gin.H{"enabled": true})
@@ -255,6 +196,5 @@ func (h *RouteHandler) Enable(c *gin.Context) {
 		return
 	}
 
-	h.logger.Error().Err(err).Str("route_id", id).Msg("failed to enable route")
-	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	helper.RespondInternalError(c, h.logger.With().Str("route_id", id).Logger(), err, "internal server error")
 }

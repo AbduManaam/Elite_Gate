@@ -45,6 +45,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 	// Create the Docker Container Manager
 	containerMgr, err := container.NewDockerContainerManager(
 		cfg.Database.DSN,
+		cfg.Database.GatewayDSN,
 		cfg.Redis.Addr,
 		cfg.Auth.JWTSecret,
 		"",

@@ -375,6 +375,72 @@ func (r *RouteRepo) Enable(ctx context.Context, id string) error {
 	return nil
 }
 
+func (r *RouteRepo) AssignPolicy(ctx context.Context, routeID, policyID string) error {
+	r.logger.Info().Str("route_id", routeID).Str("policy_id", policyID).Msg("AssignPolicy: assigning policy to route")
+
+	return r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		var pCount int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM policies WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", policyID, tc.ProjectID).Scan(&pCount); err != nil {
+			return fmt.Errorf("check policy existence: %w", err)
+		}
+		if pCount == 0 {
+			return ErrPolicyNotFound
+		}
+
+		const q = `
+			UPDATE routes
+			SET    policy_id  = $1,
+			       updated_at = NOW()
+			WHERE  id = $2
+			  AND  project_id = $3
+			  AND  deleted_at IS NULL
+		`
+		res, err := tx.ExecContext(ctx, q, policyID, routeID, tc.ProjectID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrRouteNotFound
+		}
+		return nil
+	})
+}
+
+func (r *RouteRepo) RemovePolicy(ctx context.Context, routeID string) error {
+	r.logger.Info().Str("route_id", routeID).Msg("RemovePolicy: removing policy from route")
+
+	return r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		const q = `
+			UPDATE routes
+			SET    policy_id  = NULL,
+			       updated_at = NOW()
+			WHERE  id = $1
+			  AND  project_id = $2
+			  AND  deleted_at IS NULL
+		`
+		res, err := tx.ExecContext(ctx, q, routeID, tc.ProjectID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrRouteNotFound
+		}
+		return nil
+	})
+}
+
 var (
 	ErrRouteNotFound     = errors.New("route not found")
 	ErrRouteNameConflict = errors.New("route name already exists")

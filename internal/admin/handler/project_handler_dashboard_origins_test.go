@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"elitegate/internal/admin/middleware"
+	"elitegate/internal/admin/service"
 	"elitegate/internal/storage"
 )
 
@@ -140,7 +141,8 @@ func TestUpdateDashboardOriginsHandler(t *testing.T) {
 	// seed it, and verify the value is evicted/deleted after Update.
 	realCache := middleware.NewOriginCache(repo, 10*time.Second)
 
-	h := NewProjectHandler(repo, realCache, zerolog.Nop())
+	svc := service.NewProjectService(repo, realCache, zerolog.Nop())
+	h := NewProjectHandler(svc, zerolog.Nop())
 
 	r := gin.New()
 	r.PUT("/admin/v1/projects/:projectId/dashboard-origins", h.UpdateDashboardOrigins)

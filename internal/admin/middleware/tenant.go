@@ -4,10 +4,12 @@ import (
 	"errors"
 	"net/http"
 
+	"elitegate/helper"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 )
 
 type Role string
@@ -89,7 +91,7 @@ func ProjectScope(membershipRepo *storage.MembershipRepo, projectRepo *storage.P
 				return
 			}
 			// DB error — log but don't expose
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			helper.RespondInternalError(c, zerolog.Nop(), err, "internal error")
 			return
 		}
 
@@ -104,7 +106,7 @@ func ProjectScope(membershipRepo *storage.MembershipRepo, projectRepo *storage.P
 				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "project not found"})
 				return
 			}
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			helper.RespondInternalError(c, zerolog.Nop(), err, "internal error")
 			return
 		}
 		if !active {
@@ -147,7 +149,7 @@ func RBAC(minRole Role) gin.HandlerFunc {
 
 		tc, ok := tcVal.(storage.TenantContext)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "invalid tenant context"})
+			helper.RespondInternalError(c, zerolog.Nop(), nil, "invalid tenant context")
 			return
 		}
 

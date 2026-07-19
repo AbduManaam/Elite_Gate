@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/admin/middleware"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/container"
@@ -91,18 +92,13 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 
 	// Step 1 — logical record.
 	if err := h.repo.Provision(c.Request.Context(), externalID, req.ProjectID, req.Plan); err != nil {
-		h.logger.Error().Err(err).Str("external_id", externalID).Msg("failed to insert gateway record")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to insert gateway record")
 		return
 	}
 
 	// Step 2 — physical container.
 	ip, port, publicHost, publicPort, err := h.containerMgr.Provision(c.Request.Context(), externalID, req.ProjectID, req.Plan)
 	if err != nil {
-		h.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("container provisioning failed")
-
 		// Best-effort status update — don't override the original error.
 		if dbErr := h.repo.UpdateStatus(c.Request.Context(), externalID, "failed"); dbErr != nil {
 			h.logger.Error().Err(dbErr).
@@ -110,18 +106,13 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 				Msg("also failed to mark gateway as failed in DB")
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("container provisioning failed: %v", err),
-		})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, fmt.Sprintf("container provisioning failed: %v", err))
 		return
 	}
 
 	// Step 3 — register real endpoint.
 	if err := h.repo.Register(c.Request.Context(), externalID, ip, port, publicHost, publicPort); err != nil {
-		h.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("failed to register gateway endpoint in DB")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to register gateway endpoint in DB")
 		return
 	}
 
@@ -175,8 +166,7 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 			return
 		}
-		h.logger.Error().Err(err).Str("external_id", externalID).Msg("failed to retrieve gateway status")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to retrieve gateway status")
 		return
 	}
 
@@ -190,8 +180,7 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 	// so a duplicate request never shortens or restarts the wait.
 	drainStartedAt, err := h.repo.MarkDraining(c.Request.Context(), externalID)
 	if err != nil {
-		h.logger.Error().Err(err).Str("external_id", externalID).Msg("failed to mark gateway as draining")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initiate draining"})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to initiate draining")
 		return
 	}
 
@@ -219,12 +208,7 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 	// Step 2 — stop and remove the container gracefully.
 	h.logger.Info().Str("external_id", externalID).Msg("stopping and removing gateway container runtime")
 	if err := h.containerMgr.Decommission(c.Request.Context(), externalID); err != nil {
-		h.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("failed to stop container runtime")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("failed to stop container: %v", err),
-		})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, fmt.Sprintf("failed to stop container: %v", err))
 		return
 	}
 
@@ -240,10 +224,7 @@ func (h *GatewayHandler) Decommission(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 			return
 		}
-		h.logger.Error().Err(err).
-			Str("external_id", externalID).
-			Msg("failed to decommission gateway in DB")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to decommission gateway in DB")
 		return
 	}
 	h.logger.Info().Str("external_id", externalID).Msg("gateway decommissioned successfully")
@@ -268,8 +249,7 @@ func (h *GatewayHandler) List(c *gin.Context) {
 
 	gateways, total, err := h.repo.ListByProject(c.Request.Context(), projectID, limit, offset)
 	if err != nil {
-		h.logger.Error().Err(err).Str("project_id", projectID).Msg("failed to list gateways from database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gateways"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", projectID).Logger(), err, "failed to load gateways")
 		return
 	}
 
@@ -289,7 +269,7 @@ func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
 	}
 	adminUserID, ok := adminUserIDVal.(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid session state"})
+		helper.RespondInternalError(c, h.logger, nil, "invalid session state")
 		return
 	}
 
@@ -303,8 +283,7 @@ func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
 
 	gateways, total, err := h.repo.ListAllForAdmin(c.Request.Context(), adminUserID, limit, offset)
 	if err != nil {
-		h.logger.Error().Err(err).Str("admin_user_id", adminUserID).Msg("failed to list gateways for admin")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gateways"})
+		helper.RespondInternalError(c, h.logger.With().Str("admin_user_id", adminUserID).Logger(), err, "failed to load gateways")
 		return
 	}
 

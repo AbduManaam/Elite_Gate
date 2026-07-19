@@ -53,6 +53,17 @@ func StartApp(cfg *config.Config) (*App, error) {
 		rdb = nil
 	}
 
+	if cfg.Server.ProjectID == "" {
+		return nil, fmt.Errorf("PROJECT_ID is required when running against a restricted gateway DB role — refusing to start in unscoped/global mode")
+	}
+	projectUUID, err := uuid.Parse(cfg.Server.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid PROJECT_ID %q: %w", cfg.Server.ProjectID, err)
+	}
+	tc := storage.TenantContext{ProjectID: projectUUID}
+	gatewayCtx := storage.WithTenantContext(context.Background(), tc)
+	logger.Info().Str("project_id", cfg.Server.ProjectID).Msg("Gateway running in isolated single-project mode")
+
 	// Setup dynamic route loader to refresh routes and upstream pools on reload.
 	routeRepo := storage.NewRouteRepo(db, logger)
 	upstreamRepo := storage.NewUpstreamRepo(db, logger)
@@ -64,17 +75,6 @@ func StartApp(cfg *config.Config) (*App, error) {
 	}
 	loader := runtime.NewLoader(routeRepo, upstreamTargetRepo, upstreamRepo, logger, reloadInterval)
 
-	loaderCtx := context.Background()
-	if cfg.Server.ProjectID != "" {
-		if projectUUID, err := uuid.Parse(cfg.Server.ProjectID); err == nil {
-			tc := storage.TenantContext{ProjectID: projectUUID}
-			loaderCtx = storage.WithTenantContext(loaderCtx, tc)
-			logger.Info().Str("project_id", cfg.Server.ProjectID).Msg("Gateway running in isolated single-project mode")
-		} else {
-			logger.Error().Err(err).Str("project_id", cfg.Server.ProjectID).Msg("Invalid PROJECT_ID format; running globally")
-		}
-	}
-
 	// ── Health Checker ────────────────────────────────────────────────────
 	hc := health.New(
 		10*time.Second, // probe every 10 seconds
@@ -84,7 +84,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 	loader.SetHealthChecker(hc)
 	// ─────────────────────────────────────────────────────────────────────
 
-	if err := loader.Start(loaderCtx); err != nil {
+	if err := loader.Start(gatewayCtx); err != nil {
 		if rdb != nil {
 			_ = rdb.Close()
 		}
@@ -92,7 +92,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to start route loader: %w", err)
 	}
 
-	hc.Start(loaderCtx) // stops automatically when loaderCtx is cancelled (shutdown)
+	hc.Start(gatewayCtx) // stops automatically when gatewayCtx is cancelled (shutdown)
 
 	// Injected shared security configurations
 	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
@@ -102,7 +102,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 
 	rpm := cfg.RateLimit.RequestsPerMinute
 	memFallback := ratelimit.NewMemoryLimiter(rpm)
-	memFallback.StartCleanup(loaderCtx, time.Minute)
+	memFallback.StartCleanup(gatewayCtx, time.Minute)
 
 	limiter := ratelimit.NewRedisLimiter(rdb, rpm, memFallback)
 

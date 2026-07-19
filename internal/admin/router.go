@@ -129,28 +129,48 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		ipAllowlist = middleware.AdminIPAllowlist(checker, cfg.Server.TrustProxy)
 	}
 
+	// Read rate limits from config
+	loginRPM := cfg.RateLimit.Auth.LoginRPM
+	refreshRPM := cfg.RateLimit.Auth.RefreshRPM
+	oauthRPM := cfg.RateLimit.Auth.OAuthCallbackRPM
+	signupRPM := cfg.RateLimit.Auth.SignupRPM
+	trustProxy := cfg.Server.TrustProxyHeaders
+
+	// Instantiate memory limiters for public endpoints
+	loginIPLimiter := ratelimit.NewMemoryLimiter(loginRPM)
+	loginIPLimiter.StartCleanup(context.Background(), time.Minute)
+
+	refreshIPLimiter := ratelimit.NewMemoryLimiter(refreshRPM)
+	refreshIPLimiter.StartCleanup(context.Background(), time.Minute)
+
+	signupIPLimiter := ratelimit.NewMemoryLimiter(signupRPM)
+	signupIPLimiter.StartCleanup(context.Background(), time.Minute)
+
 	adminGroup := r.Group("/admin")
 	if ipAllowlist != nil {
 		adminGroup.Use(ipAllowlist)
 	}
 
-	adminGroup.POST("/login", authHandler.Login)
-	adminGroup.POST("/refresh", authHandler.Refresh)
+	adminGroup.POST("/login", middleware.IPRateLimit(loginIPLimiter, loginRPM, "login", trustProxy), authHandler.Login)
+	adminGroup.POST("/refresh", middleware.IPRateLimit(refreshIPLimiter, refreshRPM, "refresh", trustProxy), authHandler.Refresh)
 	adminGroup.POST("/logout", authHandler.Logout)
 
 	// Public bootstrap registration.
 	// Disabled after the first admin account is created.
-	adminGroup.POST("/register", authHandler.Register)
+	adminGroup.POST("/register", middleware.IPRateLimit(signupIPLimiter, signupRPM, "register", trustProxy), authHandler.Register)
 
 	// Public tenant signup.
 	// Used by companies to create their own account.
-	adminGroup.POST("/signup", authHandler.Signup)
+	adminGroup.POST("/signup", middleware.IPRateLimit(signupIPLimiter, signupRPM, "signup", trustProxy), authHandler.Signup)
 
 	// Public Google OAuth endpoints.
 	// Used to start the Google sign-in flow and handle Google's callback.
 	if cfg.GoogleOAuth.ClientID != "" {
+		oauthCallbackLimiter := ratelimit.NewMemoryLimiter(oauthRPM)
+		oauthCallbackLimiter.StartCleanup(context.Background(), time.Minute)
+
 		adminGroup.GET("/google/login", authHandler.GoogleLogin)
-		adminGroup.GET("/google/callback", authHandler.GoogleCallback)
+		adminGroup.GET("/google/callback", middleware.IPRateLimit(oauthCallbackLimiter, oauthRPM, "google-callback", trustProxy), authHandler.GoogleCallback)
 	}
 
 	v1 := adminGroup.Group("/v1")

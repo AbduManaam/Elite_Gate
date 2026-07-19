@@ -3,11 +3,14 @@ package handler
 import (
 	"testing"
 
+	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
+
+	"github.com/rs/zerolog"
 )
 
 func TestProjectHandler_ApplyRoleBasedFields(t *testing.T) {
-	h := &ProjectHandler{}
+	svc := service.NewProjectService(nil, nil, zerolog.Nop())
 
 	plan := "enterprise"
 	projectID := "8b1e2b8a-2222-4b31-9a35-6b6b6a2f9c10"
@@ -17,7 +20,7 @@ func TestProjectHandler_ApplyRoleBasedFields(t *testing.T) {
 		IsActive: true,
 		Plan:     &plan,
 	}
-	h.applyRoleBasedFields(summaryOwner, "owner", projectID)
+	svc.ApplyRoleBasedFields(summaryOwner, "owner", projectID)
 
 	if summaryOwner.Plan == nil || *summaryOwner.Plan != "enterprise" {
 		t.Errorf("expected plan to be enterprise, got %v", summaryOwner.Plan)
@@ -37,7 +40,7 @@ func TestProjectHandler_ApplyRoleBasedFields(t *testing.T) {
 		IsActive: true,
 		Plan:     &plan,
 	}
-	h.applyRoleBasedFields(summaryEditor, "editor", projectID)
+	svc.ApplyRoleBasedFields(summaryEditor, "editor", projectID)
 
 	if summaryEditor.Plan != nil {
 		t.Errorf("expected plan to be nil for editor, got %v", summaryEditor.Plan)

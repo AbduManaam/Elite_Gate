@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"elitegate/internal/admin/service"
 	"elitegate/internal/storage"
 )
 
@@ -108,7 +109,8 @@ func TestRouteHandler_Enable_Success(t *testing.T) {
 	routeHandlerSqlDrv.mu.Unlock()
 
 	repo := storage.NewRouteRepo(db, zerolog.Nop())
-	h := NewRouteHandler(repo, zerolog.Nop(), nil)
+	svc := service.NewRouteService(repo, zerolog.Nop())
+	h := NewRouteHandler(svc, zerolog.Nop(), nil)
 
 	r := gin.New()
 	// Middleware to inject TenantContext to simulate RBAC/Scope passing
@@ -149,7 +151,8 @@ func TestRouteHandler_Enable_NotFound(t *testing.T) {
 	routeHandlerSqlDrv.mu.Unlock()
 
 	repo := storage.NewRouteRepo(db, zerolog.Nop())
-	h := NewRouteHandler(repo, zerolog.Nop(), nil)
+	svc := service.NewRouteService(repo, zerolog.Nop())
+	h := NewRouteHandler(svc, zerolog.Nop(), nil)
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -179,7 +182,8 @@ func TestRouteHandler_Enable_MissingID(t *testing.T) {
 	defer db.Close()
 
 	repo := storage.NewRouteRepo(db, zerolog.Nop())
-	h := NewRouteHandler(repo, zerolog.Nop(), nil)
+	svc := service.NewRouteService(repo, zerolog.Nop())
+	h := NewRouteHandler(svc, zerolog.Nop(), nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -208,7 +212,8 @@ func TestRouteHandler_Enable_RepoError(t *testing.T) {
 	routeHandlerSqlDrv.mu.Unlock()
 
 	repo := storage.NewRouteRepo(db, zerolog.Nop())
-	h := NewRouteHandler(repo, zerolog.Nop(), nil)
+	svc := service.NewRouteService(repo, zerolog.Nop())
+	h := NewRouteHandler(svc, zerolog.Nop(), nil)
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) {

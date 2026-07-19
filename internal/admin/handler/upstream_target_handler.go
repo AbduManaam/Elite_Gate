@@ -1,25 +1,26 @@
 package handler
 
 import (
-	"elitegate/internal/admin/service"
-	"elitegate/internal/model"
-	"elitegate/internal/storage"
 	"errors"
 	"net/http"
+
+	"elitegate/helper"
+	"elitegate/internal/admin/service"
+	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
 type UpstreamTargetHandler struct {
-	repo     *storage.UpstreamTargetRepo
+	svc      *service.UpstreamService
 	auditSvc *service.AuditService
 	logger   zerolog.Logger
 }
 
-func NewUpstreamTargetHandler(repo *storage.UpstreamTargetRepo, logger zerolog.Logger, auditSvc *service.AuditService) *UpstreamTargetHandler {
+func NewUpstreamTargetHandler(svc *service.UpstreamService, logger zerolog.Logger, auditSvc *service.AuditService) *UpstreamTargetHandler {
 	return &UpstreamTargetHandler{
-		repo:     repo,
+		svc:      svc,
 		auditSvc: auditSvc,
 		logger:   logger,
 	}
@@ -44,28 +45,14 @@ func (h *UpstreamTargetHandler) Add(c *gin.Context) {
 		return
 	}
 
-	weight := req.Weight
-	if weight <= 0 {
-		weight = 1
-	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 
-	t := &model.UpstreamTarget{
-		UpstreamID: upstreamID,
-		TargetURL:  req.TargetURL,
-		Weight:     weight,
-		Enabled:    enabled,
-	}
-
-	if err := h.repo.Add(c.Request.Context(), t); err != nil {
-		h.logger.Error().Err(err).
-			Str("upstream_id", upstreamID).
-			Str("target_url", req.TargetURL).
-			Msg("failed to add upstream target")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	t, err := h.svc.AddTarget(c.Request.Context(), upstreamID, req.TargetURL, req.Weight, enabled)
+	if err != nil {
+		helper.RespondInternalError(c, h.logger.With().Str("upstream_id", upstreamID).Str("target_url", req.TargetURL).Logger(), err, "internal server error")
 		return
 	}
 
@@ -86,16 +73,12 @@ func (h *UpstreamTargetHandler) List(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"Error": "upstream id is required"})
 		return
 	}
-	target, err := h.repo.ListByUpstream(c.Request.Context(), UpstreamID)
+	target, err := h.svc.ListTargets(c.Request.Context(), UpstreamID)
 	if err != nil {
-		h.logger.Error().Err(err).
-			Str("Upstream_id", UpstreamID).
-			Msg("failed to list upstream targets")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("Upstream_id", UpstreamID).Logger(), err, "internal server error")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"targets": target})
-
 }
 
 func (h *UpstreamTargetHandler) Remove(c *gin.Context) {
@@ -105,15 +88,12 @@ func (h *UpstreamTargetHandler) Remove(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.Remove(c.Request.Context(), targetID); err != nil {
+	if err := h.svc.RemoveTarget(c.Request.Context(), targetID); err != nil {
 		if errors.Is(err, storage.ErrUpstreamTargetNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "target not found"})
 			return
 		}
-		h.logger.Error().Err(err).
-			Str("target_id", targetID).
-			Msg("failed to remove upstream target")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		helper.RespondInternalError(c, h.logger.With().Str("target_id", targetID).Logger(), err, "internal server error")
 		return
 	}
 

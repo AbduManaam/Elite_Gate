@@ -1,12 +1,11 @@
 package handler
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
@@ -16,14 +15,14 @@ import (
 )
 
 type ApiKeyHandler struct {
-	repo     *storage.ApiKeyRepo
+	svc      *service.ApiKeyService
 	auditSvc *service.AuditService
 	logger   zerolog.Logger
 }
 
-func NewApiKeyHandler(repo *storage.ApiKeyRepo, logger zerolog.Logger, auditSvc *service.AuditService) *ApiKeyHandler {
+func NewApiKeyHandler(svc *service.ApiKeyService, logger zerolog.Logger, auditSvc *service.AuditService) *ApiKeyHandler {
 	return &ApiKeyHandler{
-		repo:     repo,
+		svc:      svc,
 		auditSvc: auditSvc,
 		logger:   logger.With().Str("handler", "api_key").Logger(),
 	}
@@ -43,114 +42,84 @@ func (h *ApiKeyHandler) Create(c *gin.Context) {
 		return
 	}
 
-	rawKey, err := generateRawKey()
-	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to generate random api key")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		return
-	}
-
 	h.logger.Info().Str("name", req.Name).Msg("creating API key in database")
 
-	record, err := h.repo.Create(c.Request.Context(), req.Name, rawKey, req.ExpiresAt, req.Roles, req.Scopes)
+	record, rawKey, err := h.svc.CreateApiKey(c.Request.Context(), req.Name, req.ExpiresAt, req.Roles, req.Scopes)
 	if err != nil {
-		h.logger.Error().Err(err).Str("name", req.Name).Msg("failed to save API key in database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		helper.RespondInternalError(c, h.logger.With().Str("name", req.Name).Logger(), err, "failed to save API key in database")
 		return
 	}
 
-	h.logger.Info().Str("key_id", record.ID).Str("name", record.Name).Msg("API key created successfully")
+	h.logger.Info().Str("api_key_id", record.ID).Str("name", record.Name).Msg("API key created successfully")
 
-	h.auditSvc.Record(c, "api_key.create", "api_key", record.ID, record.Name, gin.H{"name": record.Name, "roles": record.Roles, "scopes": record.Scopes})
-
-	// Return root fields as well as both nested options to be highly compatible with Postman tests
-	c.JSON(http.StatusCreated, gin.H{
-		"id":         record.ID,
-		"project_id": record.ProjectID,
+	h.auditSvc.Record(c, "api_key.create", "api_key", record.ID, record.Name, gin.H{
 		"name":       record.Name,
-		"status":     record.Status,
+		"expires_at": record.ExpiresAt,
 		"roles":      record.Roles,
 		"scopes":     record.Scopes,
-		"expires_at": record.ExpiresAt,
-		"created_at": record.CreatedAt,
-		"updated_at": record.UpdatedAt,
-		"api_key":    rawKey,
-		"raw_key":    rawKey,
+	})
+
+	c.JSON(http.StatusCreated, gin.H{
+		"api_key": record,
+		"raw_key": rawKey,
 	})
 }
 
 func (h *ApiKeyHandler) Rotate(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key id is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "api key id is required"})
 		return
 	}
 
-	rawKey, err := generateRawKey()
-	if err != nil {
-		h.logger.Error().Err(err).Str("key_id", id).Msg("failed to generate new random api key for rotation")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		return
-	}
+	h.logger.Info().Str("api_key_id", id).Msg("rotating API key")
 
-	h.logger.Info().Str("old_key_id", id).Msg("rotating API key in database")
-
-	record, err := h.repo.Rotate(c.Request.Context(), id, rawKey)
+	newRawKey, err := h.svc.RotateApiKey(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, storage.ErrAPIKeyNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
 			return
 		}
-		h.logger.Error().Err(err).Str("old_key_id", id).Msg("failed to rotate API key in database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		if errors.Is(err, storage.ErrAPIKeyRevoked) {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot rotate a revoked api key"})
+			return
+		}
+		helper.RespondInternalError(c, h.logger.With().Str("api_key_id", id).Logger(), err, "failed to rotate API key")
 		return
 	}
 
-	h.logger.Info().Str("old_key_id", id).Str("new_key_id", record.ID).Msg("API key rotated successfully")
-
-	h.auditSvc.Record(c, "api_key.update", "api_key", record.ID, record.Name, gin.H{"action": "rotate", "name": record.Name, "old_key_id": id})
+	h.logger.Info().Str("api_key_id", id).Msg("API key rotated successfully")
+	h.auditSvc.Record(c, "api_key.rotate", "api_key", id, "", nil)
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":         record.ID,
-		"project_id": record.ProjectID,
-		"name":       record.Name,
-		"status":     record.Status,
-		"roles":      record.Roles,
-		"scopes":     record.Scopes,
-		"expires_at": record.ExpiresAt,
-		"created_at": record.CreatedAt,
-		"updated_at": record.UpdatedAt,
-		"api_key":    rawKey,
-		"raw_key":    rawKey,
+		"id":      id,
+		"raw_key": newRawKey,
 	})
 }
 
 func (h *ApiKeyHandler) Revoke(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key id is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "api key id is required"})
 		return
 	}
 
-	h.logger.Info().Str("key_id", id).Msg("revoking API key in database")
+	h.logger.Info().Str("api_key_id", id).Msg("revoking API key")
 
-	err := h.repo.Revoke(c.Request.Context(), id)
-	if err != nil {
-		if errors.Is(err, storage.ErrAPIKeyNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
-			return
-		}
-		h.logger.Error().Err(err).Str("key_id", id).Msg("failed to revoke API key in database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	err := h.svc.RevokeApiKey(c.Request.Context(), id)
+	if err == nil {
+		h.logger.Info().Str("api_key_id", id).Msg("API key revoked successfully")
+		h.auditSvc.Record(c, "api_key.revoke", "api_key", id, "", nil)
+		c.JSON(http.StatusOK, gin.H{"message": "api key revoked", "id": id})
 		return
 	}
 
-	h.logger.Info().Str("key_id", id).Msg("API key revoked successfully")
-	h.auditSvc.Record(c, "api_key.revoke", "api_key", id, "", nil)
-	c.JSON(http.StatusOK, gin.H{
-		"message": "api key revoked",
-		"id":      id,
-	})
+	if errors.Is(err, storage.ErrAPIKeyNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
+		return
+	}
+
+	helper.RespondInternalError(c, h.logger.With().Str("api_key_id", id).Logger(), err, "failed to revoke API key")
 }
 
 func (h *ApiKeyHandler) List(c *gin.Context) {
@@ -160,12 +129,11 @@ func (h *ApiKeyHandler) List(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info().Msg("listing all API keys for project")
+	h.logger.Info().Int("page", page).Int("limit", limit).Msg("listing API keys")
 
-	keys, total, err := h.repo.ListAll(c.Request.Context(), limit, offset)
+	keys, total, err := h.svc.ListApiKeys(c.Request.Context(), limit, offset)
 	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to list API keys from database")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list API keys"})
+		helper.RespondInternalError(c, h.logger, err, "failed to list API keys")
 		return
 	}
 
@@ -173,12 +141,4 @@ func (h *ApiKeyHandler) List(c *gin.Context) {
 		Items:      keys,
 		Pagination: service.BuildPagination(page, limit, total),
 	})
-}
-
-func generateRawKey() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

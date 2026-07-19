@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"elitegate/helper"
 	adminmw "elitegate/internal/admin/middleware"
 	pwdpkg "elitegate/internal/admin/password"
 	authpkg "elitegate/internal/auth"
@@ -511,11 +512,7 @@ func toSlug(name string) string {
 }
 
 func (h *AuthHandler) internal(c *gin.Context, err error) {
-	h.logger.Error().Err(err).Msg("admin auth internal error")
-
-	c.JSON(http.StatusInternalServerError, gin.H{
-		"error": "internal server error",
-	})
+	helper.RespondInternalError(c, h.logger, err, "internal server error")
 }
 
 // Me() returns the authenticated user's identity and super-admin status.
@@ -529,8 +526,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 
 	isSuperAdmin, err := h.repo.IsSuperAdmin(c.Request.Context(), userIDStr)
 	if err != nil {
-		h.logger.Error().Err(err).Str("user_id", userIDStr).Msg("failed to resolve super-admin status")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		helper.RespondInternalError(c, h.logger.With().Str("user_id", userIDStr).Logger(), err, "failed to load user")
 		return
 	}
 

@@ -3,9 +3,8 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strings"
-	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/admin/middleware"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/model"
@@ -16,18 +15,14 @@ import (
 )
 
 type ProjectHandler struct {
-	repo         *storage.ProjectRepo
-	originCache  *middleware.OriginCache // Shared cache instance
-	logger       zerolog.Logger
-	summaryCache *storage.SummaryCache
+	svc    *service.ProjectService
+	logger zerolog.Logger
 }
 
-func NewProjectHandler(repo *storage.ProjectRepo, originCache *middleware.OriginCache, logger zerolog.Logger) *ProjectHandler {
+func NewProjectHandler(svc *service.ProjectService, logger zerolog.Logger) *ProjectHandler {
 	return &ProjectHandler{
-		repo:         repo,
-		originCache:  originCache,
-		logger:       logger,
-		summaryCache: storage.NewSummaryCache(10 * time.Second),
+		svc:    svc,
+		logger: logger,
 	}
 }
 
@@ -38,18 +33,15 @@ type projectRequest struct {
 	Plan        string `json:"plan"`
 }
 
-// Create handles POST /admin/v1/projects
 func (h *ProjectHandler) Create(c *gin.Context) {
 	var req projectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// Bad input — client's fault, no log needed
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	userIDVal, exists := c.Get("admin_user_id")
 	if !exists {
-		// Should never happen if AdminAuth middleware is applied — log as warning
 		h.logger.Warn().Msg("create project: admin_user_id missing from context")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
 		return
@@ -57,35 +49,16 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 
 	userID := userIDVal.(string)
 
-	plan := req.Plan
-	if plan == "" {
-		plan = "free"
-	}
-
-	p := &model.Project{
-		Name:        req.Name,
-		Slug:        strings.ToLower(req.Slug),
-		Description: req.Description,
-		OwnerID:     userID,
-		Plan:        plan,
-	}
-
-	if err := h.repo.Create(c.Request.Context(), p); err != nil {
-		// Slug already taken — client's fault, no log needed
+	p, err := h.svc.CreateProject(c.Request.Context(), req.Name, req.Slug, req.Description, userID, req.Plan)
+	if err != nil {
 		if errors.Is(err, storage.ErrSlugConflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "slug already exists"})
 			return
 		}
-		// Unexpected DB/server error — log it
-		h.logger.Error().Err(err).
-			Str("owner_id", userID).
-			Str("slug", req.Slug).
-			Msg("failed to create project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create project"})
+		helper.RespondInternalError(c, h.logger.With().Str("owner_id", userID).Str("slug", req.Slug).Logger(), err, "failed to create project")
 		return
 	}
 
-	// Business event worth recording
 	h.logger.Info().
 		Str("project_id", p.ID).
 		Str("slug", p.Slug).
@@ -95,7 +68,6 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"project": p})
 }
 
-// List handles GET /admin/v1/projects
 func (h *ProjectHandler) List(c *gin.Context) {
 	userIDVal, exists := c.Get(middleware.AdminUserIDKey)
 	if !exists {
@@ -105,7 +77,7 @@ func (h *ProjectHandler) List(c *gin.Context) {
 	}
 	userID, ok := userIDVal.(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid session"})
+		helper.RespondInternalError(c, h.logger, nil, "invalid session")
 		return
 	}
 
@@ -115,10 +87,9 @@ func (h *ProjectHandler) List(c *gin.Context) {
 		return
 	}
 
-	projects, total, err := h.repo.ListForUser(c.Request.Context(), userID, limit, offset)
+	projects, total, err := h.svc.ListProjects(c.Request.Context(), userID, limit, offset)
 	if err != nil {
-		h.logger.Error().Err(err).Str("user_id", userID).Msg("failed to list projects")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list projects"})
+		helper.RespondInternalError(c, h.logger.With().Str("user_id", userID).Logger(), err, "failed to list projects")
 		return
 	}
 
@@ -128,7 +99,6 @@ func (h *ProjectHandler) List(c *gin.Context) {
 	})
 }
 
-// Update handles PUT /admin/v1/projects/:projectId
 func (h *ProjectHandler) Update(c *gin.Context) {
 	id := c.Param("projectId")
 
@@ -138,23 +108,13 @@ func (h *ProjectHandler) Update(c *gin.Context) {
 		return
 	}
 
-	p := &model.Project{
-		Name:        req.Name,
-		Description: req.Description,
-		Plan:        req.Plan,
-	}
-
-	if err := h.repo.Update(c.Request.Context(), id, p); err != nil {
-		// Project does not exist — expected case, no log needed
+	p, err := h.svc.UpdateProject(c.Request.Context(), id, req.Name, req.Description, req.Plan)
+	if err != nil {
 		if errors.Is(err, storage.ErrProjectNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
 			return
 		}
-		// Unexpected DB error — log it
-		h.logger.Error().Err(err).
-			Str("project_id", id).
-			Msg("failed to update project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update project"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", id).Logger(), err, "failed to update project")
 		return
 	}
 
@@ -168,20 +128,15 @@ func (h *ProjectHandler) Update(c *gin.Context) {
 func (h *ProjectHandler) Delete(c *gin.Context) {
 	id := c.Param("projectId")
 
-	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
+	if err := h.svc.DeleteProject(c.Request.Context(), id); err != nil {
 		if errors.Is(err, storage.ErrProjectNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
 			return
 		}
-		// Unexpected DB error — log it
-		h.logger.Error().Err(err).
-			Str("project_id", id).
-			Msg("failed to delete project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete project"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", id).Logger(), err, "failed to delete project")
 		return
 	}
 
-	// Deletion is a significant business event — always log it
 	h.logger.Info().
 		Str("project_id", id).
 		Msg("project deleted")
@@ -189,14 +144,10 @@ func (h *ProjectHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "project deleted", "id": id})
 }
 
-// GetSummary handles GET /admin/v1/projects/:projectId/summary.
-// Available to any project member — viewer, editor, or owner.
-// Gates Billing/Subscription & License fields to Owner role only.
 func (h *ProjectHandler) GetSummary(c *gin.Context) {
 	tcVal, exists := c.Get("tenant_ctx")
 	if !exists {
-		h.logger.Warn().Msg("GetSummary: tenant context missing")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal context error"})
+		helper.RespondInternalError(c, h.logger, nil, "internal context error")
 		return
 	}
 	tc := tcVal.(storage.TenantContext)
@@ -208,70 +159,29 @@ func (h *ProjectHandler) GetSummary(c *gin.Context) {
 		Str("role", tc.UserRole).
 		Msg("GetSummary: request received")
 
-	if cached, ok := h.summaryCache.Get(projectID); ok {
-		h.logger.Debug().Str("project_id", projectID).Msg("GetSummary: served from cache")
-
-		// Clone cached summary before modifying role-based fields to prevent cache pollution
-		cloned := *cached
-		h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
-		cloned.Role = tc.UserRole
-
-		c.JSON(http.StatusOK, cloned)
-		return
-	}
-
-	summary, err := h.repo.GetSummary(c.Request.Context())
+	summary, err := h.svc.GetProjectSummary(c.Request.Context(), projectID, tc.UserRole)
 	if err != nil {
 		if errors.Is(err, storage.ErrProjectNotFound) {
 			h.logger.Warn().Str("project_id", projectID).Msg("GetSummary: project not found")
 			c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
 			return
 		}
-		h.logger.Error().Err(err).Str("project_id", projectID).Msg("GetSummary: failed to fetch summary")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get project summary"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", projectID).Logger(), err, "failed to get project summary")
 		return
 	}
-
-	h.summaryCache.Set(projectID, summary)
-
-	// Apply role-based visibility to a copy so we don't store nullified fields in the shared cache
-	cloned := *summary
-	h.applyRoleBasedFields(&cloned, tc.UserRole, projectID)
-	cloned.Role = tc.UserRole
 
 	h.logger.Info().
 		Str("project_id", projectID).
 		Str("user_id", tc.UserID.String()).
 		Msg("GetSummary: summary served successfully")
 
-	c.JSON(http.StatusOK, cloned)
-}
-
-// Helper to filter out billing/usage/subscription/licensing fields based on role.
-func (h *ProjectHandler) applyRoleBasedFields(summary *model.ProjectSummary, role string, projectID string) {
-	if role == "owner" {
-		status := "active"
-		if !summary.IsActive {
-			status = "suspended"
-		}
-
-		// Owner has access to Subscription details & Billing/Plan details
-		summary.Subscription = &model.Subscription{
-			Plan:   *summary.Plan,
-			Status: status,
-		}
-	} else {
-		// Viewer and Editor are strictly restricted from seeing Billing / Usage, Subscription / License details.
-		summary.Plan = nil
-		summary.Subscription = nil
-	}
+	c.JSON(http.StatusOK, summary)
 }
 
 type dashboardOriginsRequest struct {
 	Origins []string `json:"origins" binding:"required"`
 }
 
-// UpdateDashboardOrigins handles PUT /admin/v1/projects/:projectId/dashboard-origins
 func (h *ProjectHandler) UpdateDashboardOrigins(c *gin.Context) {
 	var req dashboardOriginsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -287,18 +197,15 @@ func (h *ProjectHandler) UpdateDashboardOrigins(c *gin.Context) {
 	}
 
 	projectID := c.Param("projectId")
-	if err := h.repo.UpdateDashboardOrigins(c.Request.Context(), projectID, req.Origins); err != nil {
+	origins, err := h.svc.UpdateDashboardOrigins(c.Request.Context(), projectID, req.Origins)
+	if err != nil {
 		if errors.Is(err, storage.ErrTooManyOrigins) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		h.logger.Error().Err(err).Str("project_id", projectID).Msg("failed to update dashboard origins")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update dashboard origins"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", projectID).Logger(), err, "failed to update dashboard origins")
 		return
 	}
 
-	if h.originCache != nil {
-		h.originCache.Invalidate(projectID)
-	}
-	c.JSON(http.StatusOK, gin.H{"origins": req.Origins})
+	c.JSON(http.StatusOK, gin.H{"origins": origins})
 }

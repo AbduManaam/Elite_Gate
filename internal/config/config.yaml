@@ -13,6 +13,7 @@ server:
   route_reload_interval: "10s"
   prometheus_url: "http://prometheus:9090"
   metrics_cache_ttl: "10s"
+  trust_proxy_headers: false
   allowed_origins:
     - http://localhost:5173
 
@@ -33,3 +34,8 @@ redis:
 
 rate_limit:
   requests_per_minute: 100
+  auth:
+    login_rpm: 15
+    refresh_rpm: 30
+    oauth_callback_rpm: 10
+    signup_rpm: 5

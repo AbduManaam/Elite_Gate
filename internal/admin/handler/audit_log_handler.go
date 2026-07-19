@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/model"
 	"elitegate/internal/storage"
 	"github.com/gin-gonic/gin"
@@ -51,12 +52,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 
 	page, err := h.repo.List(c.Request.Context(), filter)
 	if err != nil {
-		h.logger.Error().
-			Err(err).
-			Int("limit", filter.Limit).
-			Int("offset", filter.Offset).
-			Msg("failed to list audit logs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve audit logs"})
+		helper.RespondInternalError(c, h.logger.With().Int("limit", filter.Limit).Int("offset", filter.Offset).Logger(), err, "failed to retrieve audit logs")
 		return
 	}
 

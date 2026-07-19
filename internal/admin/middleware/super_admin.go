@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"elitegate/helper"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -32,8 +33,7 @@ func SuperAdminOnly(repo *storage.AdminAuthRepo, logger zerolog.Logger) gin.Hand
 
 		ok, err := repo.IsSuperAdmin(c.Request.Context(), userID)
 		if err != nil {
-			logger.Error().Err(err).Str("user_id", userID).Msg("super-admin check db error")
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			helper.RespondInternalError(c, logger.With().Str("user_id", userID).Logger(), err, "super-admin check db error")
 			return
 		}
 		if !ok {

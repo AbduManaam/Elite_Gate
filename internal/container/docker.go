@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"elitegate/helper"
+
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -39,18 +41,19 @@ var gatewayIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
 
 // Manages creation and removal of isolated gateway containers using Docker API.
 type DockerContainerManager struct {
-	client      *client.Client
-	postgresDSN string
-	redisAddr   string
-	jwtSecret   string
-	imageName   string
-	networkName string
-	logger      zerolog.Logger
+	client               *client.Client
+	postgresDSN          string
+	gatewayRestrictedDSN string
+	redisAddr            string
+	jwtSecret            string
+	imageName            string
+	networkName          string
+	logger               zerolog.Logger
 }
 
 // Creates a Docker container manager connected to the Docker daemon.
 // The caller must call Close() when the manager is no longer needed.
-func NewDockerContainerManager(postgresDSN, redisAddr, jwtSecret, imageName string) (*DockerContainerManager, error) {
+func NewDockerContainerManager(postgresDSN, gatewayRestrictedDSN, redisAddr, jwtSecret, imageName string) (*DockerContainerManager, error) {
 	// Ensure logs directory exists.
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
@@ -86,14 +89,19 @@ func NewDockerContainerManager(postgresDSN, redisAddr, jwtSecret, imageName stri
 		imageName = "elitegate-gateway:latest"
 	}
 
+	if gatewayRestrictedDSN == "" {
+		gatewayRestrictedDSN = postgresDSN
+	}
+
 	m := &DockerContainerManager{
-		client:      cli,
-		postgresDSN: postgresDSN,
-		redisAddr:   redisAddr,
-		jwtSecret:   jwtSecret,
-		imageName:   imageName,
-		networkName: gatewayNetworkName,
-		logger:      logger,
+		client:               cli,
+		postgresDSN:          postgresDSN,
+		gatewayRestrictedDSN: gatewayRestrictedDSN,
+		redisAddr:            redisAddr,
+		jwtSecret:            jwtSecret,
+		imageName:            imageName,
+		networkName:          gatewayNetworkName,
+		logger:               logger,
 	}
 
 	if err := m.ensureNetwork(context.Background()); err != nil {
@@ -143,13 +151,16 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 	}
 	exposedPorts := nat.PortSet{gatewayContainerPort: struct{}{}}
 
+	derivedJWTSecret := helper.DeriveTenantJWTSecret(m.jwtSecret, projectID)
+
 	cfg := &container.Config{
 		Image: m.imageName,
 		Env: []string{
 			"GATEWAY_PORT=8080",
-			fmt.Sprintf("POSTGRES_DSN=%s", m.postgresDSN),
+			fmt.Sprintf("POSTGRES_DSN=%s", m.gatewayRestrictedDSN),
 			fmt.Sprintf("REDIS_ADDR=%s", m.redisAddr),
-			fmt.Sprintf("JWT_SECRET=%s", m.jwtSecret),
+			fmt.Sprintf("REDIS_PREFIX=tenant:%s:", projectID),
+			fmt.Sprintf("JWT_SECRET=%s", derivedJWTSecret),
 			fmt.Sprintf("PROJECT_ID=%s", projectID),
 			"APP_ENV=production",
 			"ROUTE_RELOAD_INTERVAL=10s",

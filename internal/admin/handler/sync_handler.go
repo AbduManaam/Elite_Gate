@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"elitegate/helper"
 	"elitegate/internal/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -62,9 +63,7 @@ func NewSyncHandler(gatewayRepo *storage.GatewayRepo, logger zerolog.Logger) *Sy
 func (h *SyncHandler) Reload(c *gin.Context) {
 	gateways, err := h.gatewayRepo.ListActive(c.Request.Context())
 	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to list active gateways for reload")
-		// Do NOT leak the raw DB error to the client.
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve active gateways"})
+		helper.RespondInternalError(c, h.logger, err, "failed to retrieve active gateways")
 		return
 	}
 
@@ -125,15 +124,14 @@ func (h *SyncHandler) Reload(c *gin.Context) {
 func (h *SyncHandler) ReloadProject(c *gin.Context) {
 	tcVal, exists := c.Get("tenant_ctx")
 	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "tenant context missing"})
+		helper.RespondInternalError(c, h.logger, nil, "tenant context missing")
 		return
 	}
 	tc := tcVal.(storage.TenantContext)
 
 	gateways, _, err := h.gatewayRepo.ListByProject(c.Request.Context(), tc.ProjectID.String(), 0, 0)
 	if err != nil {
-		h.logger.Error().Err(err).Str("project_id", tc.ProjectID.String()).Msg("failed to list gateways for project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve project gateways"})
+		helper.RespondInternalError(c, h.logger.With().Str("project_id", tc.ProjectID.String()).Logger(), err, "failed to retrieve project gateways")
 		return
 	}
 
