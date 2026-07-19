@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  repo-hygiene:
+    name: Repository Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed to catch anything reintroduced
+
+      - name: Run hygiene check
+        run: ./scripts/check_repo_hygiene.sh --verbose
+
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: repo-hygiene   # don't waste build minutes if hygiene already failed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true   # caches module downloads between runs — faster, cheap to add
+
+      - name: Verify go.sum matches go.mod
+        run: go mod verify
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./... -race -count=1
