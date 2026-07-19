@@ -9,7 +9,7 @@
 *.dylib
 
 # Go modules
-go.sum
+# go.sum is intentionally tracked — required for reproducible builds (go mod verify)
 
 # Dependency directories
 vendor/
