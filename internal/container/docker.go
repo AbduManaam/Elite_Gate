@@ -4,6 +4,7 @@ package container
 // Faster and easier to manage Docker programmatically.
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"elitegate/helper"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -28,7 +30,6 @@ const (
 	gatewayProjectLabel = "elitegate.project.id"
 
 	containerStartTimeout = 30 * time.Second
-	healthPollInterval    = 500 * time.Millisecond
 )
 
 // Gateway's internal container port.
@@ -41,19 +42,19 @@ var gatewayIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
 
 // Manages creation and removal of isolated gateway containers using Docker API.
 type DockerContainerManager struct {
-	client               *client.Client
-	postgresDSN          string
-	gatewayRestrictedDSN string
-	redisAddr            string
-	jwtSecret            string
-	imageName            string
-	networkName          string
-	logger               zerolog.Logger
+	client        *client.Client
+	adminAPIURL   string
+	redisAddr     string
+	redisPassword string
+	jwtSecret     string
+	imageName     string
+	networkName   string
+	logger        zerolog.Logger
 }
 
 // Creates a Docker container manager connected to the Docker daemon.
 // The caller must call Close() when the manager is no longer needed.
-func NewDockerContainerManager(postgresDSN, gatewayRestrictedDSN, redisAddr, jwtSecret, imageName string) (*DockerContainerManager, error) {
+func NewDockerContainerManager(adminAPIURL, redisAddr, redisPassword, jwtSecret, imageName string) (*DockerContainerManager, error) {
 	// Ensure logs directory exists.
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
@@ -89,19 +90,15 @@ func NewDockerContainerManager(postgresDSN, gatewayRestrictedDSN, redisAddr, jwt
 		imageName = "elitegate-gateway:latest"
 	}
 
-	if gatewayRestrictedDSN == "" {
-		gatewayRestrictedDSN = postgresDSN
-	}
-
 	m := &DockerContainerManager{
-		client:               cli,
-		postgresDSN:          postgresDSN,
-		gatewayRestrictedDSN: gatewayRestrictedDSN,
-		redisAddr:            redisAddr,
-		jwtSecret:            jwtSecret,
-		imageName:            imageName,
-		networkName:          gatewayNetworkName,
-		logger:               logger,
+		client:        cli,
+		adminAPIURL:   adminAPIURL,
+		redisAddr:     redisAddr,
+		redisPassword: redisPassword,
+		jwtSecret:     jwtSecret,
+		imageName:     imageName,
+		networkName:   gatewayNetworkName,
+		logger:        logger,
 	}
 
 	if err := m.ensureNetwork(context.Background()); err != nil {
@@ -157,10 +154,14 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 		Image: m.imageName,
 		Env: []string{
 			"GATEWAY_PORT=8080",
-			fmt.Sprintf("POSTGRES_DSN=%s", m.gatewayRestrictedDSN),
+			fmt.Sprintf("ADMIN_API_URL=%s", m.adminAPIURL),
 			fmt.Sprintf("REDIS_ADDR=%s", m.redisAddr),
+			fmt.Sprintf("REDIS_PASSWORD=%s", m.redisPassword),
 			fmt.Sprintf("REDIS_PREFIX=tenant:%s:", projectID),
 			fmt.Sprintf("JWT_SECRET=%s", derivedJWTSecret),
+			// Same derived value: gateway must NOT re-derive from JWT_SECRET
+			// (that would double-HMAC). Explicit token matches admin middleware.
+			fmt.Sprintf("GATEWAY_SYNC_TOKEN=%s", derivedJWTSecret),
 			fmt.Sprintf("PROJECT_ID=%s", projectID),
 			"APP_ENV=production",
 			"ROUTE_RELOAD_INTERVAL=10s",
@@ -375,55 +376,112 @@ func (m *DockerContainerManager) ensureNetwork(ctx context.Context) error {
 	return nil
 }
 
-// Wait until the container is healthy or the timeout is reached.
+// Wait until the container is healthy using Docker events to avoid active polling.
 func (m *DockerContainerManager) waitUntilHealthy(ctx context.Context, containerID string, timeout time.Duration) error {
-	m.logger.Debug().Str("container_id", containerID).Msg("waiting for container health check")
-	deadline := time.Now().Add(timeout)
+	m.logger.Debug().Str("container_id", containerID).Msg("waiting for container health check using docker events")
 
-	for time.Now().Before(deadline) {
-		inspect, err := m.client.ContainerInspect(ctx, containerID)
-		if err != nil {
-			m.logger.Error().Err(err).Str("container_id", containerID).Msg("inspect failed while waiting for health check")
-			return fmt.Errorf("inspect container: %w", err)
-		}
+	// Context with timeout for the healthcheck window.
+	eventCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-		if !inspect.State.Running {
-			err = fmt.Errorf("container exited unexpectedly with code %d", inspect.State.ExitCode)
-			m.logger.Error().Err(err).Str("container_id", containerID).Msg("container is not running")
-			return err
-		}
+	// Listen only for events on this specific container: health transitions,
+	// exit ("die"), or removal ("destroy"). "health_status" is fuzzy-matched
+	// by the Docker daemon (see moby#25798), so this also catches the
+	// intermediate "health_status: running" action — handled as a no-op below.
+	filter := filters.NewArgs()
+	filter.Add("type", "container")
+	filter.Add("container", containerID)
+	filter.Add("event", string(events.ActionHealthStatus))
+	filter.Add("event", string(events.ActionDie))
+	filter.Add("event", string(events.ActionDestroy))
 
-		//// If no health check exists, a running container is considered healthy.
-		if inspect.State.Health == nil {
-			m.logger.Debug().Str("container_id", containerID).Msg("no health check defined, container is running and considered healthy")
-			return nil
-		}
+	// Subscribe *before* inspecting, so a transition that happens between
+	// the inspect call and the subscribe call is never missed.
+	msgChan, errChan := m.client.Events(eventCtx, events.ListOptions{
+		Filters: filter,
+	})
 
-		m.logger.Debug().
-			Str("container_id", containerID).
-			Str("health_status", inspect.State.Health.Status).
-			Msg("polled container health status")
-
-		switch inspect.State.Health.Status {
-		case "healthy":
-			return nil
-		case "unhealthy":
-			err = fmt.Errorf("container healthcheck reported unhealthy")
-			m.logger.Error().Err(err).Str("container_id", containerID).Msg("health check failed")
-			return err
-		}
-
-		select {
-		case <-ctx.Done():
-			m.logger.Error().Err(ctx.Err()).Str("container_id", containerID).Msg("context cancelled while waiting for health check")
-			return ctx.Err()
-		case <-time.After(healthPollInterval):
-		}
+	// Immediately check current state in case the container already reached
+	// a terminal/healthy state before the subscription above was set up.
+	inspect, err := m.client.ContainerInspect(eventCtx, containerID)
+	if err != nil {
+		m.logger.Error().Err(err).Str("container_id", containerID).Msg("initial inspect failed while waiting for health check")
+		return fmt.Errorf("inspect container: %w", err)
 	}
 
-	err := fmt.Errorf("container did not become healthy within %s", timeout)
-	m.logger.Error().Err(err).Str("container_id", containerID).Msg("health check timed out")
-	return err
+	if !inspect.State.Running {
+		err = fmt.Errorf("container exited unexpectedly with code %d", inspect.State.ExitCode)
+		m.logger.Error().Err(err).Str("container_id", containerID).Msg("container is not running")
+		return err
+	}
+
+	if inspect.State.Health == nil {
+		m.logger.Debug().Str("container_id", containerID).Msg("no health check defined, container is running and considered healthy")
+		return nil
+	}
+
+	switch inspect.State.Health.Status {
+	case "healthy":
+		m.logger.Debug().Str("container_id", containerID).Msg("container is already healthy")
+		return nil
+	case "unhealthy":
+		err = fmt.Errorf("container healthcheck reported unhealthy")
+		m.logger.Error().Err(err).Str("container_id", containerID).Msg("health check failed")
+		return err
+	}
+
+	for {
+		select {
+		case <-eventCtx.Done():
+			if errors.Is(eventCtx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("container did not become healthy within %s", timeout)
+				m.logger.Error().Err(err).Str("container_id", containerID).Msg("health check timed out")
+				return err
+			}
+			m.logger.Error().Err(eventCtx.Err()).Str("container_id", containerID).Msg("context cancelled while waiting for health check")
+			return eventCtx.Err()
+
+		case err := <-errChan:
+			// The SDK always sends exactly one value on this channel before
+			// closing it, so we always return here rather than looping on a
+			// closed channel.
+			if err != nil && !errors.Is(err, context.Canceled) {
+				m.logger.Error().Err(err).Str("container_id", containerID).Msg("docker events stream error, falling back to a direct inspect")
+				// The event stream itself failed (daemon restart, network
+				// blip, etc). Fall back to one last direct inspect rather
+				// than failing provisioning outright for a transport hiccup.
+				fallback, errInspect := m.client.ContainerInspect(ctx, containerID)
+				if errInspect == nil && fallback.State.Health != nil && fallback.State.Health.Status == "healthy" {
+					return nil
+				}
+				return fmt.Errorf("docker events error: %w", err)
+			}
+			return eventCtx.Err()
+
+		case msg := <-msgChan:
+			switch msg.Action {
+			case events.ActionHealthStatusHealthy:
+				m.logger.Debug().Str("container_id", containerID).Msg("container reported healthy via docker events")
+				return nil
+			case events.ActionHealthStatusUnhealthy:
+				err = fmt.Errorf("container healthcheck reported unhealthy via docker events")
+				m.logger.Error().Err(err).Str("container_id", containerID).Msg("health check failed")
+				return err
+			case events.ActionDie, events.ActionDestroy:
+				err = fmt.Errorf("container exited or was destroyed")
+				m.logger.Error().Err(err).Str("container_id", containerID).Msg("container died unexpectedly")
+				return err
+			default:
+				// e.g. events.ActionHealthStatusRunning — an intermediate
+				// state, not a terminal one. Log at debug for traceability
+				// and keep waiting.
+				m.logger.Debug().
+					Str("container_id", containerID).
+					Str("action", string(msg.Action)).
+					Msg("ignoring non-terminal docker event while waiting for health")
+			}
+		}
+	}
 }
 
 // Get the last container logs.Used to help diagnose startup failures.

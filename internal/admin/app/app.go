@@ -36,6 +36,10 @@ func StartApp(cfg *config.Config) (*App, error) {
 	logger := observability.NewServiceLogger(logCfg, "elitegate-admin")
 	logger.Info().Msg("elitegate admin starting...")
 
+	if cfg.Database.DSN == "" {
+		return nil, fmt.Errorf("database connection DSN (POSTGRES_DSN) is required")
+	}
+
 	// Connect to postgres using injected database configs
 	db, err := storage.NewPostgres(logger, cfg.Database)
 	if err != nil {
@@ -44,9 +48,9 @@ func StartApp(cfg *config.Config) (*App, error) {
 
 	// Create the Docker Container Manager
 	containerMgr, err := container.NewDockerContainerManager(
-		cfg.Database.DSN,
-		cfg.Database.GatewayDSN,
+		cfg.Server.AdminAPIURL,
 		cfg.Redis.Addr,
+		cfg.Redis.Password,
 		cfg.Auth.JWTSecret,
 		"",
 	)

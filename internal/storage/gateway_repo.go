@@ -48,15 +48,16 @@ func NewGatewayRepo(db *sql.DB) *GatewayRepo {
 }
 
 type GatewayRecord struct {
-	ID         string `json:"id"`
-	ProjectID  string `json:"project_id"`
-	ExternalID string `json:"external_id"`
-	EndpointIP string `json:"endpoint_ip"`
-	Port       string `json:"gateway_port"`
-	PublicHost string `json:"public_host"`
-	PublicPort string `json:"public_port"`
-	Plan       string `json:"plan"`
-	Status     string `json:"status"`
+	ID         string    `json:"id"`
+	ProjectID  string    `json:"project_id"`
+	ExternalID string    `json:"external_id"`
+	EndpointIP string    `json:"endpoint_ip"`
+	Port       string    `json:"gateway_port"`
+	PublicHost string    `json:"public_host"`
+	PublicPort string    `json:"public_port"`
+	Plan       string    `json:"plan"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Provision inserts a gateway row in "provisioning" state.
@@ -212,7 +213,7 @@ func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
 	const q = `
 		SELECT id, project_id::text, external_id, endpoint_ip, gateway_port,
 		       COALESCE(public_host, ''), COALESCE(public_port, ''),
-		       plan, status
+		       plan, status, created_at
 		FROM   gateways
 		WHERE  status     = 'active'
 		  AND  deleted_at IS NULL
@@ -227,7 +228,7 @@ func (r *GatewayRepo) ListActive(ctx context.Context) ([]GatewayRecord, error) {
 	var gateways []GatewayRecord
 	for rows.Next() {
 		var g GatewayRecord
-		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status); err != nil {
+		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status, &g.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan gateway row: %w", err)
 		}
 		gateways = append(gateways, g)
@@ -284,14 +285,14 @@ func (r *GatewayRepo) GetByExternalID(ctx context.Context, externalID string) (*
 	const q = `
 		SELECT id, project_id::text, external_id, endpoint_ip, gateway_port,
 		       COALESCE(public_host, ''), COALESCE(public_port, ''),
-		       plan, status
+		       plan, status, created_at
 		FROM   gateways
 		WHERE  external_id = $1
 		  AND  deleted_at  IS NULL
 	`
 	var g GatewayRecord
 	err := r.db.QueryRowContext(ctx, q, externalID).Scan(
-		&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status,
+		&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status, &g.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrGatewayNotFound
@@ -324,7 +325,7 @@ func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string, limit
 		q := `
 			SELECT id, project_id::text, external_id, endpoint_ip, gateway_port,
 			       COALESCE(public_host, ''), COALESCE(public_port, ''),
-			       plan, status
+			       plan, status, created_at
 			FROM   gateways
 			WHERE  project_id = $1
 			  AND  deleted_at IS NULL
@@ -342,7 +343,7 @@ func (r *GatewayRepo) ListByProject(ctx context.Context, projectID string, limit
 
 		for rows.Next() {
 			var g GatewayRecord
-			if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status); err != nil {
+			if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status, &g.CreatedAt); err != nil {
 				return fmt.Errorf("scan gateway row: %w", err)
 			}
 			gateways = append(gateways, g)
@@ -380,7 +381,7 @@ func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string, l
 	q := `
 		SELECT g.id, g.project_id::text, g.external_id, g.endpoint_ip, g.gateway_port,
 		       COALESCE(g.public_host, ''), COALESCE(g.public_port, ''),
-		       g.plan, g.status
+		       g.plan, g.status, g.created_at
 		FROM   gateways g
 		JOIN   project_members pm ON g.project_id = pm.project_id
 		JOIN   projects p ON g.project_id = p.id
@@ -403,7 +404,7 @@ func (r *GatewayRepo) ListAllForAdmin(ctx context.Context, adminUserID string, l
 	var gateways []GatewayRecord
 	for rows.Next() {
 		var g GatewayRecord
-		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status); err != nil {
+		if err := rows.Scan(&g.ID, &g.ProjectID, &g.ExternalID, &g.EndpointIP, &g.Port, &g.PublicHost, &g.PublicPort, &g.Plan, &g.Status, &g.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan gateway row: %w", err)
 		}
 		gateways = append(gateways, g)

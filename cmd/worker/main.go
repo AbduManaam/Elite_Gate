@@ -22,6 +22,9 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to load config")
 	}
+	if cfg.Database.DSN == "" {
+		logger.Fatal().Msg("database connection DSN (POSTGRES_DSN) is required")
+	}
 
 	db, err := storage.NewPostgres(logger, cfg.Database)
 	if err != nil {
@@ -30,7 +33,7 @@ func main() {
 	defer db.Close()
 
 	containerMgr, err := container.NewDockerContainerManager(
-		cfg.Database.DSN, cfg.Database.GatewayDSN, cfg.Redis.Addr, cfg.Auth.JWTSecret, "",
+		cfg.Server.AdminAPIURL, cfg.Redis.Addr, cfg.Redis.Password, cfg.Auth.JWTSecret, "",
 	)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to init container manager")

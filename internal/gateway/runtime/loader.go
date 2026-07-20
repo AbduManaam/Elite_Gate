@@ -2,23 +2,25 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
+	"elitegate/helper"
+	"elitegate/internal/auth"
 	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/loadbalancer"
-	"elitegate/internal/storage"
 )
 
 type Loader struct {
-	repo       *storage.RouteRepo
-	targetRepo *storage.UpstreamTargetRepo
-	upstreams  *storage.UpstreamRepo
-	logger     zerolog.Logger
-	interval   time.Duration
-	health     *health.Checker
+	controlClient *ControlPlaneClient
+	redis         *redis.Client
+	logger        zerolog.Logger
+	interval      time.Duration
+	health        *health.Checker
 
 	mu           sync.RWMutex
 	snapshot     Snapshot
@@ -26,14 +28,13 @@ type Loader struct {
 	strategies   map[string]loadbalancer.Strategy
 }
 
-func NewLoader(repo *storage.RouteRepo, targetRepo *storage.UpstreamTargetRepo, upstreams *storage.UpstreamRepo, logger zerolog.Logger, interval time.Duration) *Loader {
+func NewLoader(controlClient *ControlPlaneClient, rdb *redis.Client, logger zerolog.Logger, interval time.Duration) *Loader {
 	return &Loader{
-		repo:       repo,
-		targetRepo: targetRepo,
-		upstreams:  upstreams,
-		logger:     logger,
-		interval:   interval,
-		strategies: make(map[string]loadbalancer.Strategy),
+		controlClient: controlClient,
+		redis:         rdb,
+		logger:        logger,
+		interval:      interval,
+		strategies:    make(map[string]loadbalancer.Strategy),
 	}
 }
 
@@ -64,52 +65,65 @@ func (l *Loader) loop(ctx context.Context) {
 	}
 }
 
-// Reloads routes and upstream target pools from the database and
-// atomically swaps the in-memory snapshot.
+// Reloads configuration snapshot from the control plane and
+// atomically swaps the in-memory snapshot, warming up the api key cache in Redis.
 func (l *Loader) reload(ctx context.Context) error {
-	routes, err := l.repo.ListEnabled(ctx)
+	snap, err := l.controlClient.FetchSnapshot(ctx)
 	if err != nil {
-		return err
+		l.logger.Error().Err(err).Msg("failed to fetch configuration snapshot from control plane")
+		return err // keep serving the last good snapshot
 	}
 
-	pools, err := l.buildUpstreamPools(ctx)
-	if err != nil {
-
-		l.logger.Error().Err(err).Msg("failed to build upstream LB pools; keeping previous pool state")
-		l.mu.Lock()
-		prevPools := l.snapshot.UpstreamPools
-		l.snapshot = Snapshot{Routes: routes, UpstreamPools: prevPools}
-		l.mu.Unlock()
-		l.logger.Info().Int("routes", len(routes)).Msg("gateway routes reloaded (pools unchanged)")
-		return nil
-	}
+	pools := l.buildPoolsFromSnapshot(snap)
 
 	l.mu.Lock()
-	l.snapshot = Snapshot{Routes: routes, UpstreamPools: pools}
+	l.snapshot = Snapshot{
+		Routes:        snap.Routes,
+		UpstreamPools: pools,
+	}
 	l.mu.Unlock()
 
 	l.syncHealthTargets(pools)
+	l.WarmAPIKeyCache(ctx, snap.APIKeys)
 
 	l.logger.Info().
-		Int("routes", len(routes)).
+		Int("routes", len(snap.Routes)).
 		Int("upstream_pools", len(pools)).
-		Msg("gateway routes reloaded")
+		Int("api_keys_warmed", len(snap.APIKeys)).
+		Msg("gateway config reloaded from control plane")
 	return nil
 }
 
-/*
-1.Takes all backend servers from pools
-2.Extracts their URLs
-3.Sends them to health system:
-The function tells the health-check system:
-Here is the latest list of backend servers you should monitor. Forget old ones, use this updated list*/
+// WarmAPIKeyCache pushes every active key from the latest snapshot into
+// Redis under this tenant's own prefix, matching the cache key format
+// RedisKeyStore.Validate already reads. A revoked key still validates for
+// up to one reload interval (same staleness bound routes already accept),
+// but a key no longer in the snapshot is never re-cached, so once its TTL
+// expires it stops validating with no explicit invalidation push needed.
+func (l *Loader) WarmAPIKeyCache(ctx context.Context, keys []TenantAPIKeyDTO) {
+	if l.redis == nil {
+		return
+	}
+	for _, k := range keys {
+		rec := auth.APIKeyRecord{
+			Roles:  k.Roles,
+			Scopes: k.Scopes,
+		}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			continue
+		}
+		cacheKey := helper.PrefixedKey("apikey:" + k.KeyHash)
+		if err := l.redis.Set(ctx, cacheKey, data, 10*time.Minute).Err(); err != nil {
+			l.logger.Warn().Err(err).Msg("failed to warm api key cache entry")
+		}
+	}
+}
 
 func (l *Loader) syncHealthTargets(pools map[string]UpstreamPool) {
 	if l.health == nil {
 		return
 	}
-	// Build map[targetURL → TargetHealthConfig] from all pools.
-	// Every target in a pool shares the upstream's health path.
 	targets := make(map[string]health.TargetHealthConfig, len(pools)*2)
 	for _, pool := range pools {
 		for _, t := range pool.Targets {
@@ -122,23 +136,13 @@ func (l *Loader) syncHealthTargets(pools map[string]UpstreamPool) {
 	l.health.SyncTargets(targets)
 }
 
-func (l *Loader) buildUpstreamPools(ctx context.Context) (map[string]UpstreamPool, error) {
-	upstreams, err := l.upstreams.ListAllEnabledGlobal(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (l *Loader) buildPoolsFromSnapshot(snap *TenantSnapshot) map[string]UpstreamPool {
+	pools := make(map[string]UpstreamPool, len(snap.Upstreams))
 
-	targetsByUpstream, err := l.targetRepo.ListAllEnabledGlobal(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	pools := make(map[string]UpstreamPool, len(upstreams))
-
-	for _, u := range upstreams {
+	for _, u := range snap.Upstreams {
 		strategy := l.strategyFor(u.ID, u.LBStrategy)
 
-		rawTargets := targetsByUpstream[u.ID]
+		rawTargets := snap.Targets[u.ID]
 		targets := make([]loadbalancer.Target, 0, len(rawTargets))
 		for _, t := range rawTargets {
 			if !t.Enabled {
@@ -167,7 +171,7 @@ func (l *Loader) buildUpstreamPools(ctx context.Context) (map[string]UpstreamPoo
 		}
 	}
 
-	return pools, nil
+	return pools
 }
 
 func (l *Loader) strategyFor(upstreamID, lbStrategy string) loadbalancer.Strategy {
@@ -206,7 +210,6 @@ func (l *Loader) Current() Snapshot {
 	return l.snapshot
 }
 
-// Public wrapper for triggering a route cache reload.
 func (l *Loader) Reload(ctx context.Context) error {
 	return l.reload(ctx)
 }

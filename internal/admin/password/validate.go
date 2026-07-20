@@ -8,7 +8,7 @@ import (
 )
 
 // MinLength is the minimum number of characters required for an admin password.
-const MinLength = 12
+const MinLength = 8
 
 // MaxLength mirrors bcrypt's hard truncation limit.
 const MaxLength = 72

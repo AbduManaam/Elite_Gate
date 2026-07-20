@@ -291,6 +291,14 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		}
 	}
 
+	tenantSync := handler.NewTenantSyncHandler(db, logger)
+	internalGroup := r.Group("/internal/v1")
+	internalGroup.Use(middleware.RequireGatewayToken(cfg.Auth.JWTSecret))
+	{
+		internalGroup.GET("/projects/:project_id/sync", tenantSync.GetTenantSnapshot)
+	}
+
 	logger.Debug().Msg("admin router configured")
 	return r, nil
 }
+

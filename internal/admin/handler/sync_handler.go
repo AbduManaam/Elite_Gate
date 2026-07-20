@@ -196,12 +196,17 @@ func (h *SyncHandler) ReloadProject(c *gin.Context) {
 	})
 }
 
-// reloadURL builds the reload endpoint URL for a gateway.
-// 0.0.0.0 is treated as localhost (Docker / local dev convenience).
 func reloadURL(g storage.GatewayRecord) string {
-	host := g.EndpointIP
+	host := g.PublicHost
+	if host == "" || host == "0.0.0.0" {
+		host = g.EndpointIP
+	}
 	if host == "" || host == "0.0.0.0" {
 		host = "localhost"
 	}
-	return fmt.Sprintf("http://%s:%s/reload", host, g.Port)
+	port := g.PublicPort
+	if port == "" || port == "0" {
+		port = g.Port
+	}
+	return fmt.Sprintf("http://%s:%s/reload", host, port)
 }

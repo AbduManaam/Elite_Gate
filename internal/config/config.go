@@ -64,7 +64,11 @@ type RedisConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret string `mapstructure:"jwt_secret"`
+	JWTSecret        string `mapstructure:"jwt_secret"`
+	// GatewaySyncToken is a pre-derived HMAC token used by gateway containers
+	// to authenticate against the control-plane /internal/v1/projects/:id/sync
+	// endpoint. If empty, the gateway derives it at startup from JWTSecret + ProjectID.
+	GatewaySyncToken string `mapstructure:"gateway_sync_token"`
 }
 
 type AuthRateLimitConfig struct {
@@ -137,6 +141,7 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.admin_port", "ADMIN_PORT")
 	viper.BindEnv("server.admin_api_url", "ADMIN_API_URL")
 	viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
+	viper.BindEnv("auth.gateway_sync_token", "GATEWAY_SYNC_TOKEN")
 	viper.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_RPM")
 	viper.BindEnv("server.read_timeout", "SERVER_READ_TIMEOUT")
 	viper.BindEnv("server.write_timeout", "SERVER_WRITE_TIMEOUT")
@@ -191,9 +196,9 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// 5. Validation Check
-	if cfg.Database.DSN == "" {
-		return nil, errors.New("database connection DSN (POSTGRES_DSN) is required")
-	}
+	// POSTGRES_DSN is intentionally optional here: the data-plane gateway no
+	// longer talks to Postgres (it syncs from the control plane). Admin and
+	// worker validate DSN themselves before opening a DB connection.
 	if cfg.Auth.JWTSecret == "" {
 		return nil, errors.New("JWT secret (JWT_SECRET) is required")
 	}

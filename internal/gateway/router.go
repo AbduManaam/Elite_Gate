@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"database/sql"
 	"net/http"
 
 	"elitegate/internal/config"
@@ -20,7 +19,6 @@ import (
 
 func NewRouter(
 	logger zerolog.Logger,
-	db *sql.DB,
 	rdb *redis.Client,
 	cfg *config.Config,
 	loader *runtime.Loader,

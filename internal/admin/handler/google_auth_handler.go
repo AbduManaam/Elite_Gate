@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	authpkg "elitegate/internal/auth"
 	"elitegate/internal/model"
@@ -90,20 +89,14 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	tokens, err := h.issueTokensForUser(c, user.ID, user.Username)
-	if err != nil {
+	if _, err := h.issueTokensForUser(c, user.ID, user.Username); err != nil {
 		h.internal(c, err)
 		return
 	}
 
 	h.logger.Info().Str("admin_user_id", user.ID).Msg("admin google login success")
 
-	redirectURL := frontendURL + "/oauth/callback#" +
-		url.Values{
-			"access_token": {tokens.AccessToken},
-			"expires_in":   {strconv.Itoa(tokens.ExpiresIn)},
-			"token_type":   {"Bearer"},
-		}.Encode()
+	redirectURL := frontendURL + "/oauth/callback?oauth=success"
 
 	c.Redirect(http.StatusFound, redirectURL)
 }
