@@ -1,19 +1,11 @@
 package handler
 
-// Login
-//   ↓
-// Validate password
-//   ↓
-// Issue access token + refresh token
-//   ↓
-// Refresh expired access tokens
-//   ↓
-// Logout / revoke refresh token
-
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,45 +13,78 @@ import (
 	adminmw "elitegate/internal/admin/middleware"
 	pwdpkg "elitegate/internal/admin/password"
 	authpkg "elitegate/internal/auth"
+	"elitegate/internal/mailer"
+	"elitegate/internal/model"
 	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	maxLoginFailures = 5
-	lockoutDuration  = 15 * time.Minute
-	maxAuthBodyBytes = 1 << 20
+	maxLoginFailures      = 5
+	lockoutDuration       = 15 * time.Minute
+	maxAuthBodyBytes      = 1 << 20
+	genericForgotResponse = "If an account exists for that email address, password reset instructions have been sent."
 )
 
+type AuthRepository interface {
+	FindAdminUserByEmail(ctx context.Context, email string) (*model.AdminUser, error)
+	FindAdminUserByID(ctx context.Context, userID string) (*model.AdminUser, error)
+	FindAdminUserByUsername(ctx context.Context, username string) (*model.AdminUser, error)
+	FindAdminUserByGoogleID(ctx context.Context, googleID string) (*model.AdminUser, error)
+	CreateAdminUser(ctx context.Context, username, passwordHash string, isSuperAdmin bool) (*model.AdminUser, error)
+	LinkGoogleAccount(ctx context.Context, userID, googleID, avatarURL string) error
+	SignupTx(ctx context.Context, username, email, passwordHash, companyName, slug, plan string) (*storage.SignupResult, error)
+	GoogleSignupTx(ctx context.Context, email, googleID, displayName, avatarURL, companyName, slug string) (*storage.SignupResult, error)
+	ReplacePasswordResetTokenTx(ctx context.Context, adminUserID, tokenHash string, expiresAt time.Time) (string, error)
+	InvalidatePasswordResetTokenByID(ctx context.Context, tokenID string) error
+	FindValidPasswordResetToken(ctx context.Context, tokenHash string) (*model.PasswordResetToken, error)
+	ResetPasswordTx(ctx context.Context, resetTokenID, adminUserID, newPasswordHash string) error
+	IncrementAdminLoginFailure(ctx context.Context, username string) error
+	LockAdminUser(ctx context.Context, username string, until time.Time) error
+	UpdateAdminLoginSuccess(ctx context.Context, userID string) error
+	FindRefreshToken(ctx context.Context, tokenHash string) (*model.RefreshToken, error)
+	RotateRefreshToken(ctx context.Context, oldHash, newHash, userID string, exp time.Time, ip, ua string) error
+	CreateRefreshToken(ctx context.Context, userID, tokenHash string, expiresAt time.Time, ipAddress, userAgent string) error
+	RevokeRefreshToken(ctx context.Context, tokenHash string) error
+	AdminUserCount(ctx context.Context) (int, error)
+	IsSuperAdmin(ctx context.Context, userID string) (bool, error)
+}
+
 type AuthHandler struct {
-	repo    *storage.AdminAuthRepo
-	tokens  *authpkg.AdminTokenManager
-	limiter *adminmw.LoginRateLimiter
-	logger  zerolog.Logger
+	repo             AuthRepository
+	tokens           *authpkg.AdminTokenManager
+	limiter          *adminmw.LoginRateLimiter
+	mailer           mailer.Mailer
+	passwordResetURL string
+	logger           zerolog.Logger
+	secureCookies    bool
 
 	oauthState      *authpkg.OAuthStateManager
 	googleOAuth     *authpkg.GoogleOAuth
 	frontendBaseURL string
-
-	secureCookies bool
 }
 
 func NewAuthHandler(
-	repo *storage.AdminAuthRepo,
+	repo AuthRepository,
 	tokens *authpkg.AdminTokenManager,
 	limiter *adminmw.LoginRateLimiter,
+	mailer mailer.Mailer,
+	passwordResetURL string,
 	logger zerolog.Logger,
 	secureCookies bool,
 ) *AuthHandler {
 	return &AuthHandler{
-		repo:          repo,
-		tokens:        tokens,
-		limiter:       limiter,
-		logger:        logger,
-		secureCookies: secureCookies,
+		repo:             repo,
+		tokens:           tokens,
+		limiter:          limiter,
+		mailer:           mailer,
+		passwordResetURL: passwordResetURL,
+		logger:           logger,
+		secureCookies:    secureCookies,
 	}
 }
 
@@ -84,32 +109,51 @@ type tokenResponse struct {
 	TokenType   string `json:"token_type"`
 }
 
-// registerRequest is the body for POST /admin/register and POST /admin/v1/admins.
 type registerRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=64"`
 	Password string `json:"password" binding:"required"`
 }
 
-// registerResponse is returned on successful registration.
 type registerResponse struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 }
 
-// signupRequest is the body for POST /admin/signup (permanent public self-service).
 type signupRequest struct {
-	Username    string `json:"username"  binding:"required,min=3,max=64"`
-	Password    string `json:"password"  binding:"required"`
-	CompanyName string `json:"company"   binding:"required,min=1,max=128"`
+	Username    string `json:"username" binding:"required,min=3,max=64"`
+	Email       string `json:"email"    binding:"required,email"`
+	Password    string `json:"password" binding:"required"`
+	CompanyName string `json:"company"  binding:"required,min=1,max=128"`
 	Plan        string `json:"plan"` // optional, defaults to "free"
 }
 
-// signupResponse is returned after a successful self-service signup.
 type signupResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
 	TokenType   string `json:"token_type"`
 	ProjectID   string `json:"project_id"`
+}
+
+type forgotPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type resetPasswordRequest struct {
+	Token       string `json:"token" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+func isUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
+
+func getPQConstraint(err error) string {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Constraint
+	}
+	return ""
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -317,26 +361,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// Register handles admin account creation.
-//
-// It serves TWO routes with ONE handler:
-//
-//	POST /admin/register     → public, only works when 0 admins exist (bootstrap)
-//	POST /admin/v1/admins    → protected, requires a valid admin JWT
-//
-// IMPORTANT (SaaS onboarding model):
-//
-//	POST /admin/v1/admins is a PLATFORM-OPERATOR SUPPORT TOOL — not the normal
-//	tenant onboarding path. Use it only for edge cases such as: manually
-//	provisioning an account on a tenant's behalf for support/escalation reasons.
-//	Normal tenant self-registration goes through POST /admin/signup, which
-//	requires NO super-admin involvement.
-//
-// How it knows which route called it:
-//
-//	AdminAuth middleware sets admin_user_id in context for the protected route.
-//	If that key is present → authenticated call → skip bootstrap check.
-//	If that key is absent  → public call → enforce bootstrap gate.
 func (h *AuthHandler) Register(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
 
@@ -346,10 +370,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// ── Bootstrap gate ────────────────────────────────────────────────
-	// If the caller is NOT authenticated (no admin_user_id in context),
-	// this is the public /admin/register endpoint.
-	// Only allow it when the DB has zero admin users.
 	_, isAuthenticated := c.Get(adminmw.AdminUserIDKey)
 	if !isAuthenticated {
 		count, err := h.repo.AdminUserCount(c.Request.Context())
@@ -365,23 +385,17 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	// ── Password strength ─────────────────────────────────────────────
 	if err := pwdpkg.Validate(req.Password); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// ── Hash password ─────────────────────────────────────────────────
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		h.internal(c, err)
 		return
 	}
 
-	// ── Persist ───────────────────────────────────────────────────────
-	// Bootstrap path: isSuperAdmin=true (first-ever admin = platform operator).
-	// Authenticated path (POST /admin/v1/admins): isSuperAdmin=false (support account).
-	// Note: isAuthenticated was already determined above (bootstrap gate check).
 	isSuperAdmin := !isAuthenticated
 	user, err := h.repo.CreateAdminUser(c.Request.Context(), req.Username, string(hash), isSuperAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -404,19 +418,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	})
 }
 
-// Signup handles POST /admin/signup.
-//
-// This is a PERMANENT, public, unauthenticated endpoint.
-// It requires NO super-admin involvement at any point — this is by design.
-// Any company can call this endpoint to self-onboard onto the platform.
-//
-// Uses SignupTx to atomically:
-//  1. Create an admin_user account (is_super_admin=FALSE — tenant, not operator)
-//  2. Create a project owned by that user
-//  3. Insert the owner project_members row
-//
-// If project creation fails, the admin_user row is rolled back —
-// no orphaned accounts are possible.
 func (h *AuthHandler) Signup(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
 
@@ -427,14 +428,14 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		return
 	}
 
-	// ── Password strength ─────────────────────────────────────────────
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+
 	if err := pwdpkg.Validate(req.Password); err != nil {
 		h.logger.Warn().Str("username", req.Username).Msg("signup: weak password rejected")
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// ── Hash password ─────────────────────────────────────────────────
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		h.logger.Error().Err(err).Str("username", req.Username).Msg("signup: password hashing failed")
@@ -448,19 +449,25 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		plan = "free"
 	}
 
-	// ── Single atomic transaction: admin_user + project + membership ──────────
-	// SignupTx rolls back ALL inserts if any step fails.
-	// No orphaned admin_user rows are possible.
 	result, err := h.repo.SignupTx(
 		c.Request.Context(),
-		req.Username, string(hash), req.CompanyName, slug, plan,
+		req.Username, email, string(hash), req.CompanyName, slug, plan,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		h.logger.Info().Str("username", req.Username).Msg("signup: username already taken")
-		c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
-		return
-	}
 	if err != nil {
+		if isUniqueViolation(err) {
+			constraint := getPQConstraint(err)
+			switch constraint {
+			case "admin_users_email_unique":
+				c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
+				return
+			case "idx_admin_users_username", "admin_users_username_key":
+				c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
+				return
+			default:
+				c.JSON(http.StatusConflict, gin.H{"error": "account details already registered"})
+				return
+			}
+		}
 		h.logger.Error().Err(err).Str("username", req.Username).Msg("signup: atomic signup transaction failed")
 		h.internal(c, err)
 		return
@@ -473,7 +480,6 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		Str("company", req.CompanyName).
 		Msg("new tenant self-registered via /signup")
 
-	// ── Issue tokens — company is live immediately ───────────────────────
 	tokens, err := h.issueTokensForUser(c, result.User.ID, result.User.Username)
 	if err != nil {
 		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: token issuance failed")
@@ -489,8 +495,160 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 	})
 }
 
-// toSlug converts a human company name to a URL-safe slug.
-// "Company B Corp" → "company-b-corp"
+func (h *AuthHandler) invalidateFailedToken(tokenID, reason string) {
+	if tokenID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := h.repo.InvalidatePasswordResetTokenByID(ctx, tokenID); err != nil {
+		h.logger.Error().Err(err).Str("token_id", tokenID).Str("reason", reason).Msg("forgot password: failed to invalidate token after delivery error")
+	}
+}
+
+func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req forgotPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid email format"})
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+
+	user, err := h.repo.FindAdminUserByEmail(c.Request.Context(), email)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Msg("forgot password lookup failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	if !user.PasswordHash.Valid ||
+		strings.TrimSpace(user.PasswordHash.String) == "" ||
+		strings.HasSuffix(strings.ToLower(user.Email), "@elitegate.local") {
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	if h.mailer == nil {
+		h.logger.Error().Str("user_id", user.ID).Msg("forgot password: mailer is not configured")
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	rawToken, err := authpkg.GeneratePasswordResetToken()
+	if err != nil {
+		h.logger.Error().Err(err).Msg("forgot password: generate token failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	tokenHash := authpkg.HashToken(rawToken)
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+
+	tokenID, err := h.repo.ReplacePasswordResetTokenTx(c.Request.Context(), user.ID, tokenHash, expiresAt)
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", user.ID).Msg("forgot password: transactional token replace failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	parsedURL, err := url.ParseRequestURI(h.passwordResetURL)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("forgot password: parse reset URL failed")
+		h.invalidateFailedToken(tokenID, "url parse failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+		return
+	}
+
+	q := parsedURL.Query()
+	q.Set("token", rawToken)
+	parsedURL.RawQuery = q.Encode()
+
+	mailCtx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.mailer.SendPasswordReset(mailCtx, user.Email, parsedURL.String()); err != nil {
+		h.logger.Error().Err(err).Str("user_id", user.ID).Msg("forgot password: send email failed")
+		h.invalidateFailedToken(tokenID, "smtp delivery failed")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": genericForgotResponse})
+}
+
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req resetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request format"})
+		return
+	}
+
+	rawToken := strings.TrimSpace(req.Token)
+	if rawToken == "" || len(rawToken) > 1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired password reset link"})
+		return
+	}
+
+	if err := pwdpkg.Validate(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tokenHash := authpkg.HashToken(rawToken)
+	resetToken, err := h.repo.FindValidPasswordResetToken(c.Request.Context(), tokenHash)
+	if errors.Is(err, storage.ErrInvalidPasswordResetToken) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired password reset link"})
+		return
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Msg("reset password find token internal failure")
+		h.internal(c, err)
+		return
+	}
+
+	user, err := h.repo.FindAdminUserByID(c.Request.Context(), resetToken.AdminUserID)
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", resetToken.AdminUserID).Msg("reset password: load user failed")
+		h.internal(c, err)
+		return
+	}
+
+	if user.PasswordHash.Valid && strings.TrimSpace(user.PasswordHash.String) != "" {
+		if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.String), []byte(req.NewPassword)) == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "new password must be different from current password"})
+			return
+		}
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		h.internal(c, err)
+		return
+	}
+
+	if err := h.repo.ResetPasswordTx(c.Request.Context(), resetToken.ID, resetToken.AdminUserID, string(hash)); err != nil {
+		if errors.Is(err, storage.ErrInvalidPasswordResetToken) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired password reset link"})
+			return
+		}
+		h.logger.Error().Err(err).Msg("reset password transaction failed")
+		h.internal(c, err)
+		return
+	}
+
+	clearRefreshCookie(c, h.secureCookies)
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password reset successfully. Sign in using your new password."})
+}
+
 func toSlug(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	var b strings.Builder
@@ -515,8 +673,6 @@ func (h *AuthHandler) internal(c *gin.Context, err error) {
 	helper.RespondInternalError(c, h.logger, err, "internal server error")
 }
 
-// Me() returns the authenticated user's identity and super-admin status.
-// The frontend calls this once per session to determine access permissions.
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID, _ := c.Get(adminmw.AdminUserIDKey)
 	username, _ := c.Get(adminmw.AdminUsernameKey)

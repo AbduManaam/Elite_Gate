@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -71,11 +73,25 @@ type AuthConfig struct {
 	GatewaySyncToken string `mapstructure:"gateway_sync_token"`
 }
 
+type MailConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	Host             string `mapstructure:"host"`
+	Port             int    `mapstructure:"port"`
+	Username         string `mapstructure:"username"`
+	Password         string `mapstructure:"password"`
+	FromEmail        string `mapstructure:"from_email"`
+	FromName         string `mapstructure:"from_name"`
+	PasswordResetURL string `mapstructure:"password_reset_url"`
+	TLSMode          string `mapstructure:"tls_mode"` // "starttls", "implicit", "none"
+}
+
 type AuthRateLimitConfig struct {
-	LoginRPM         int `mapstructure:"login_rpm"`
-	RefreshRPM       int `mapstructure:"refresh_rpm"`
-	OAuthCallbackRPM int `mapstructure:"oauth_callback_rpm"`
-	SignupRPM        int `mapstructure:"signup_rpm"`
+	LoginRPM          int `mapstructure:"login_rpm"`
+	RefreshRPM        int `mapstructure:"refresh_rpm"`
+	OAuthCallbackRPM  int `mapstructure:"oauth_callback_rpm"`
+	SignupRPM         int `mapstructure:"signup_rpm"`
+	ForgotPasswordRPM int `mapstructure:"forgot_password_rpm"`
+	ResetPasswordRPM  int `mapstructure:"reset_password_rpm"`
 }
 
 type RateLimitConfig struct {
@@ -90,6 +106,7 @@ type Config struct {
 	Redis       RedisConfig       `mapstructure:"redis"`
 	Auth        AuthConfig        `mapstructure:"auth"`
 	GoogleOAuth GoogleOAuthConfig `mapstructure:"google_oauth"`
+	Mail        MailConfig        `mapstructure:"mail"`
 	RateLimit   RateLimitConfig   `mapstructure:"rate_limit"`
 	AppEnv      string            `mapstructure:"app_env"`
 }
@@ -123,6 +140,13 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("rate_limit.auth.refresh_rpm", 30)
 	viper.SetDefault("rate_limit.auth.oauth_callback_rpm", 10)
 	viper.SetDefault("rate_limit.auth.signup_rpm", 5)
+	viper.SetDefault("rate_limit.auth.forgot_password_rpm", 5)
+	viper.SetDefault("rate_limit.auth.reset_password_rpm", 10)
+	viper.SetDefault("mail.enabled", false)
+	viper.SetDefault("mail.port", 587)
+	viper.SetDefault("mail.from_name", "Elite Gateway")
+	viper.SetDefault("mail.tls_mode", "starttls")
+	viper.SetDefault("mail.password_reset_url", "http://localhost:5173/reset-password")
 	viper.SetDefault("app_env", "development")
 
 	// 3. Read the YAML configuration file if it exists
@@ -159,6 +183,8 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("rate_limit.auth.refresh_rpm", "RATE_LIMIT_AUTH_REFRESH_RPM")
 	viper.BindEnv("rate_limit.auth.oauth_callback_rpm", "RATE_LIMIT_AUTH_OAUTH_CALLBACK_RPM")
 	viper.BindEnv("rate_limit.auth.signup_rpm", "RATE_LIMIT_AUTH_SIGNUP_RPM")
+	viper.BindEnv("rate_limit.auth.forgot_password_rpm", "RATE_LIMIT_AUTH_FORGOT_PASSWORD_RPM")
+	viper.BindEnv("rate_limit.auth.reset_password_rpm", "RATE_LIMIT_AUTH_RESET_PASSWORD_RPM")
 	viper.BindEnv("server.prometheus_url", "PROMETHEUS_URL")
 	viper.BindEnv("server.metrics_cache_ttl", "METRICS_CACHE_TTL")
 	viper.BindEnv("google_oauth.client_id", "GOOGLE_CLIENT_ID")
@@ -166,6 +192,15 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("google_oauth.redirect_url", "GOOGLE_REDIRECT_URL")
 	viper.BindEnv("google_oauth.state_secret", "OAUTH_STATE_SECRET")
 	viper.BindEnv("google_oauth.frontend_url", "FRONTEND_URL")
+	viper.BindEnv("mail.enabled", "SMTP_ENABLED")
+	viper.BindEnv("mail.host", "SMTP_HOST")
+	viper.BindEnv("mail.port", "SMTP_PORT")
+	viper.BindEnv("mail.username", "SMTP_USERNAME")
+	viper.BindEnv("mail.password", "SMTP_PASSWORD")
+	viper.BindEnv("mail.from_email", "SMTP_FROM_EMAIL")
+	viper.BindEnv("mail.from_name", "SMTP_FROM_NAME")
+	viper.BindEnv("mail.tls_mode", "SMTP_TLS_MODE")
+	viper.BindEnv("mail.password_reset_url", "PASSWORD_RESET_URL")
 
 	viper.AutomaticEnv()
 
@@ -240,8 +275,72 @@ func LoadConfig() (*Config, error) {
 	if err := validateDuration("server.route_reload_interval", cfg.Server.RouteReloadInterval); err != nil {
 		return nil, err
 	}
+	if err := validateMailConfig(cfg.Mail, cfg.AppEnv == "production"); err != nil {
+		return nil, fmt.Errorf("mail configuration error: %w", err)
+	}
 
 	return &cfg, nil
+}
+
+func validatePasswordResetURL(rawURL string, production bool) error {
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid password reset URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("password reset URL must use http or https")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("password reset URL must contain a host")
+	}
+	if production && parsed.Scheme != "https" {
+		return fmt.Errorf("password reset URL must use HTTPS in production")
+	}
+	return nil
+}
+
+func validateMailConfig(cfg MailConfig, production bool) error {
+	if !cfg.Enabled {
+		if production {
+			return errors.New("mail must be enabled (SMTP_ENABLED=true) in production")
+		}
+		return nil
+	}
+
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("smtp.host cannot be empty when mail is enabled")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return fmt.Errorf("invalid smtp.port: %d", cfg.Port)
+	}
+
+	fromEmail := strings.TrimSpace(cfg.FromEmail)
+	if fromEmail == "" {
+		return errors.New("smtp.from_email cannot be empty when mail is enabled")
+	}
+	if _, err := mail.ParseAddress(fromEmail); err != nil {
+		return fmt.Errorf("invalid smtp.from_email format: %w", err)
+	}
+
+	username := strings.TrimSpace(cfg.Username)
+	password := strings.TrimSpace(cfg.Password)
+	if username != "" && password == "" {
+		return errors.New("smtp.password is required when username is provided")
+	}
+
+	tlsMode := strings.ToLower(strings.TrimSpace(cfg.TLSMode))
+	switch tlsMode {
+	case "", "starttls", "implicit":
+		// allowed modes
+	case "none":
+		if production {
+			return errors.New("smtp.tls_mode 'none' is not permitted in production")
+		}
+	default:
+		return fmt.Errorf("unsupported smtp.tls_mode: %q", cfg.TLSMode)
+	}
+
+	return validatePasswordResetURL(cfg.PasswordResetURL, production)
 }
 
 func validateDuration(name, raw string) error {

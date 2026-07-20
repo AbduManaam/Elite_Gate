@@ -58,7 +58,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			clientID = claims.ClientID
 			role = claims.Role
 			scopes = []string{}
-		} else if key := r.Header.Get("X-API-Key"); key != "" && a.KeyStore != nil {
+		} else if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" && a.KeyStore != nil {
 			rec, valid := a.KeyStore.Validate(key)
 			if !valid {
 				httpJSON(w, http.StatusUnauthorized,

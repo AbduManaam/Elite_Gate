@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"elitegate/helper"
@@ -26,26 +28,68 @@ type KeyRepository interface {
 	FindByHash(ctx context.Context, keyHash string) (*APIKeyRecord, error)
 }
 
+type KeySnapshotDTO struct {
+	KeyHash string   `json:"key_hash"`
+	Roles   []string `json:"roles"`
+	Scopes  []string `json:"scopes"`
+}
+
 type RedisKeyStore struct {
 	redis *redis.Client
 	db    KeyRepository
+	mu    sync.RWMutex
+	local map[string]*APIKeyRecord
 }
 
 func NewRedisKeyStore(rdb *redis.Client, db KeyRepository) *RedisKeyStore {
-	return &RedisKeyStore{redis: rdb, db: db}
+	return &RedisKeyStore{
+		redis: rdb,
+		db:    db,
+		local: make(map[string]*APIKeyRecord),
+	}
 }
 
-// Validate checks Redis first, falls back to PostgreSQL on miss.
+// UpdateLocalKeys warms the in-memory map directly from snapshot sync DTOs.
+func (s *RedisKeyStore) UpdateLocalKeys(clientID string, keys []KeySnapshotDTO) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	newLocal := make(map[string]*APIKeyRecord, len(keys))
+	for _, k := range keys {
+		newLocal[k.KeyHash] = &APIKeyRecord{
+			ClientID: clientID,
+			Roles:    k.Roles,
+			Scopes:   k.Scopes,
+		}
+	}
+	s.local = newLocal
+}
+
+// Validate checks local memory first, then Redis, falling back to PostgreSQL on miss.
 func (s *RedisKeyStore) Validate(key string) (*APIKeyRecord, bool) {
 	return s.ValidateWithContext(context.Background(), key)
 }
 
-// ValidateWithContext checks Redis first using the request context, falling back to PostgreSQL on miss.
+// ValidateWithContext checks local memory first, then Redis, falling back to PostgreSQL on miss.
 func (s *RedisKeyStore) ValidateWithContext(ctx context.Context, key string) (*APIKeyRecord, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, false
+	}
 	keyHash := hashKey(key)
-	cacheKey := helper.PrefixedKey(keyPrefix + keyHash)
 
-	// Checking if API key is available in Redis cache
+	// 1. Check local in-memory snapshot cache first
+	s.mu.RLock()
+	rec, ok := s.local[keyHash]
+	s.mu.RUnlock()
+	if ok && rec != nil {
+		if rec.RevokedAt != nil && rec.RevokedAt.Before(time.Now()) {
+			return nil, false
+		}
+		return rec, true
+	}
+
+	// 2. Checking if API key is available in Redis cache
+	cacheKey := helper.PrefixedKey(keyPrefix + keyHash)
 	if s.redis != nil {
 		data, err := s.redis.Get(ctx, cacheKey).Result()
 		if err == nil {
@@ -60,7 +104,7 @@ func (s *RedisKeyStore) ValidateWithContext(ctx context.Context, key string) (*A
 		return nil, false
 	}
 
-	// Fallback to check api key availability in postgresql database
+	// 3. Fallback to check api key availability in postgresql database
 	record, err := s.db.FindByHash(ctx, keyHash)
 	if err != nil || record == nil {
 		return nil, false
@@ -79,6 +123,7 @@ func (s *RedisKeyStore) ValidateWithContext(ctx context.Context, key string) (*A
 }
 
 func hashKey(key string) string {
+	key = strings.TrimSpace(key)
 	h := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", h)
 }

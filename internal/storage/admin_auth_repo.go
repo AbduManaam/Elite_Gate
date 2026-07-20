@@ -468,7 +468,7 @@ type SignupResult struct {
 // Returns sql.ErrNoRows if the username is already taken (ON CONFLICT DO NOTHING).
 func (r *AdminAuthRepo) SignupTx(
 	ctx context.Context,
-	username, passwordHash, companyName, slug, plan string,
+	username, email, passwordHash, companyName, slug, plan string,
 ) (*SignupResult, error) {
 
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -481,20 +481,16 @@ func (r *AdminAuthRepo) SignupTx(
 	var user model.AdminUser
 	const qUser = `
 		INSERT INTO admin_users (username, password_hash, email, is_super_admin, auth_provider)
-		VALUES ($1, $2, $1 || '@elitegate.local', FALSE, 'password')
-		ON CONFLICT (username) DO NOTHING
+		VALUES ($1, $2, $3, FALSE, 'password')
 		RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
 		          failed_login_attempts, locked_until, last_login_at, created_at
 	`
-	err = tx.QueryRowContext(ctx, qUser, username, passwordHash).Scan(
+	err = tx.QueryRowContext(ctx, qUser, username, passwordHash, email).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.GoogleID, &user.AvatarURL, &user.AuthProvider,
 		&user.FailedLoginAttempts, &user.LockedUntil,
 		&user.LastLoginAt, &user.CreatedAt,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, sql.ErrNoRows // username already taken
-	}
 	if err != nil {
 		return nil, fmt.Errorf("SignupTx: insert admin_user: %w", err)
 	}
@@ -514,21 +510,20 @@ func (r *AdminAuthRepo) SignupTx(
 		&project.ID, &project.IsActive, &project.CreatedAt, &project.UpdatedAt,
 	)
 	if err != nil {
-		var pqErr interface{ Code() string }
 		if isUniqueViolation(err) {
-			// Slug collision — retry once with a user-ID suffix.
-			retrySlug := slug + "-" + user.ID[:8]
+			suffix := user.ID
+			if len(suffix) > 8 {
+				suffix = suffix[:8]
+			}
+			retrySlug := slug + "-" + suffix
 			err = tx.QueryRowContext(ctx, qProject, companyName, retrySlug, user.ID, plan).Scan(
 				&project.ID, &project.IsActive, &project.CreatedAt, &project.UpdatedAt,
 			)
 			if err != nil {
-				// Rollback is automatic via defer — no orphaned user.
 				return nil, fmt.Errorf("SignupTx: insert project (retry slug %q): %w", retrySlug, err)
 			}
 			project.Slug = retrySlug
 		} else {
-			_ = pqErr // silence unused variable
-			// Rollback is automatic via defer — no orphaned user.
 			return nil, fmt.Errorf("SignupTx: insert project: %w", err)
 		}
 	} else {
@@ -675,4 +670,147 @@ func usernameFromEmail(email string) string {
 	parts := strings.SplitN(email, "@", 2)
 
 	return parts[0]
+}
+
+var ErrInvalidPasswordResetToken = errors.New("invalid or expired password reset token")
+
+func (r *AdminAuthRepo) ReplacePasswordResetTokenTx(
+	ctx context.Context,
+	adminUserID, tokenHash string,
+	expiresAt time.Time,
+) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("ReplacePasswordResetTokenTx begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Row-level lock serializes concurrent replacement requests for the same user
+	var dummyID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM admin_users WHERE id = $1 FOR UPDATE
+	`, adminUserID).Scan(&dummyID)
+	if err != nil {
+		return "", fmt.Errorf("lock admin user row for reset token replacement: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = NOW()
+		WHERE admin_user_id = $1 AND used_at IS NULL
+	`, adminUserID)
+	if err != nil {
+		return "", fmt.Errorf("invalidate previous reset tokens: %w", err)
+	}
+
+	var newTokenID string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO password_reset_tokens (admin_user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, adminUserID, tokenHash, expiresAt).Scan(&newTokenID)
+	if err != nil {
+		return "", fmt.Errorf("insert new reset token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit reset token replace: %w", err)
+	}
+
+	return newTokenID, nil
+}
+
+func (r *AdminAuthRepo) InvalidatePasswordResetTokenByID(ctx context.Context, tokenID string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = NOW()
+		WHERE id = $1 AND used_at IS NULL
+	`, tokenID)
+	if err != nil {
+		return fmt.Errorf("InvalidatePasswordResetTokenByID: %w", err)
+	}
+	return nil
+}
+
+func (r *AdminAuthRepo) FindValidPasswordResetToken(ctx context.Context, tokenHash string) (*model.PasswordResetToken, error) {
+	var t model.PasswordResetToken
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, admin_user_id, token_hash, expires_at, used_at, created_at
+		FROM password_reset_tokens
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+	`, tokenHash).Scan(&t.ID, &t.AdminUserID, &t.TokenHash, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidPasswordResetToken
+	}
+	if err != nil {
+		return nil, fmt.Errorf("FindValidPasswordResetToken: %w", err)
+	}
+	return &t, nil
+}
+
+func (r *AdminAuthRepo) ResetPasswordTx(ctx context.Context, resetTokenID, adminUserID, newPasswordHash string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ResetPasswordTx begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = NOW()
+		WHERE id = $1 AND admin_user_id = $2 AND used_at IS NULL AND expires_at > NOW()
+	`, resetTokenID, adminUserID)
+	if err != nil {
+		return fmt.Errorf("claim reset token exec: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("claim reset token rows affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrInvalidPasswordResetToken
+	}
+
+	resUser, err := tx.ExecContext(ctx, `
+		UPDATE admin_users
+		SET password_hash = $2, failed_login_attempts = 0, locked_until = NULL
+		WHERE id = $1
+	`, adminUserID, newPasswordHash)
+	if err != nil {
+		return fmt.Errorf("update user password exec: %w", err)
+	}
+	rowsUser, err := resUser.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update user password rows affected: %w", err)
+	}
+	if rowsUser == 0 {
+		return fmt.Errorf("user not found for password reset")
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE refresh_tokens
+		SET revoked_at = NOW()
+		WHERE admin_user_id = $1 AND revoked_at IS NULL
+	`, adminUserID)
+	if err != nil {
+		return fmt.Errorf("revoke user refresh tokens: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ResetPasswordTx commit: %w", err)
+	}
+
+	return nil
+}
+
+func (r *AdminAuthRepo) DeleteExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM password_reset_tokens
+		WHERE expires_at < NOW() OR used_at IS NOT NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("DeleteExpiredPasswordResetTokens: %w", err)
+	}
+	return res.RowsAffected()
 }

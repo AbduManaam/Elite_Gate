@@ -106,6 +106,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
 	// db is gone; RedisKeyStore's cache is kept warm by the loader instead:
 	keyStore := auth.NewRedisKeyStore(rdb, nil)
+	loader.SetKeyStore(keyStore)
 	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore, &logger)
 
 	rpm := cfg.RateLimit.RequestsPerMinute

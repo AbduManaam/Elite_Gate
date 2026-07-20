@@ -18,6 +18,7 @@ import (
 type Loader struct {
 	controlClient *ControlPlaneClient
 	redis         *redis.Client
+	keyStore      *auth.RedisKeyStore
 	logger        zerolog.Logger
 	interval      time.Duration
 	health        *health.Checker
@@ -36,6 +37,10 @@ func NewLoader(controlClient *ControlPlaneClient, rdb *redis.Client, logger zero
 		interval:      interval,
 		strategies:    make(map[string]loadbalancer.Strategy),
 	}
+}
+
+func (l *Loader) SetKeyStore(ks *auth.RedisKeyStore) {
+	l.keyStore = ks
 }
 
 func (l *Loader) SetHealthChecker(hc *health.Checker) {
@@ -95,19 +100,33 @@ func (l *Loader) reload(ctx context.Context) error {
 }
 
 // WarmAPIKeyCache pushes every active key from the latest snapshot into
-// Redis under this tenant's own prefix, matching the cache key format
-// RedisKeyStore.Validate already reads. A revoked key still validates for
-// up to one reload interval (same staleness bound routes already accept),
-// but a key no longer in the snapshot is never re-cached, so once its TTL
-// expires it stops validating with no explicit invalidation push needed.
+// local memory and Redis under this tenant's own prefix.
 func (l *Loader) WarmAPIKeyCache(ctx context.Context, keys []TenantAPIKeyDTO) {
+	dtos := make([]auth.KeySnapshotDTO, len(keys))
+	for i, k := range keys {
+		dtos[i] = auth.KeySnapshotDTO{
+			KeyHash: k.KeyHash,
+			Roles:   k.Roles,
+			Scopes:  k.Scopes,
+		}
+	}
+	projectID := ""
+	if l.controlClient != nil {
+		projectID = l.controlClient.ProjectID()
+	}
+
+	if l.keyStore != nil {
+		l.keyStore.UpdateLocalKeys(projectID, dtos)
+	}
+
 	if l.redis == nil {
 		return
 	}
 	for _, k := range keys {
 		rec := auth.APIKeyRecord{
-			Roles:  k.Roles,
-			Scopes: k.Scopes,
+			ClientID: projectID,
+			Roles:    k.Roles,
+			Scopes:   k.Scopes,
 		}
 		data, err := json.Marshal(rec)
 		if err != nil {

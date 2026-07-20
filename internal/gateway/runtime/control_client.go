@@ -45,6 +45,13 @@ func NewControlPlaneClient(adminURL, projectID, gatewayToken string, logger zero
 	}
 }
 
+func (c *ControlPlaneClient) ProjectID() string {
+	if c == nil {
+		return ""
+	}
+	return c.projectID
+}
+
 func (c *ControlPlaneClient) FetchSnapshot(ctx context.Context) (*TenantSnapshot, error) {
 	url := fmt.Sprintf("%s/internal/v1/projects/%s/sync", c.adminURL, c.projectID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

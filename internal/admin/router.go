@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"elitegate/internal/config"
 	"elitegate/internal/container"
 	"elitegate/internal/ipfilter"
+	"elitegate/internal/mailer"
 	"elitegate/internal/promclient"
 	"elitegate/internal/ratelimit"
 	"elitegate/internal/storage"
@@ -55,7 +57,39 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	}
 	authRepo := storage.NewAdminAuthRepo(db)
 	loginLimiter := middleware.NewLoginRateLimiter(5, time.Minute)
-	authHandler := handler.NewAuthHandler(authRepo, adminTokens, loginLimiter, logger, cfg.AppEnv == "production")
+
+	var mailClient mailer.Mailer
+	if cfg.Mail.Enabled {
+		if cfg.AppEnv == "production" && cfg.Mail.Host == "" {
+			return nil, errors.New("SMTP configuration is required in production when mail is enabled")
+		}
+		if cfg.Mail.Host != "" {
+			smtpClient, err := mailer.NewSMTPMailer(mailer.SMTPConfig{
+				Host:       cfg.Mail.Host,
+				Port:       cfg.Mail.Port,
+				Username:   cfg.Mail.Username,
+				Password:   cfg.Mail.Password,
+				FromEmail:  cfg.Mail.FromEmail,
+				FromName:   cfg.Mail.FromName,
+				TLSMode:    cfg.Mail.TLSMode,
+				Production: cfg.AppEnv == "production",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("initialize SMTP mailer: %w", err)
+			}
+			mailClient = smtpClient
+		}
+	}
+
+	authHandler := handler.NewAuthHandler(
+		authRepo,
+		adminTokens,
+		loginLimiter,
+		mailClient,
+		cfg.Mail.PasswordResetURL,
+		logger,
+		cfg.AppEnv == "production",
+	)
 
 	// Enable Google OAuth if it is configured.
 	if cfg.GoogleOAuth.ClientID != "" {
@@ -134,6 +168,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	refreshRPM := cfg.RateLimit.Auth.RefreshRPM
 	oauthRPM := cfg.RateLimit.Auth.OAuthCallbackRPM
 	signupRPM := cfg.RateLimit.Auth.SignupRPM
+	forgotPasswordRPM := cfg.RateLimit.Auth.ForgotPasswordRPM
+	resetPasswordRPM := cfg.RateLimit.Auth.ResetPasswordRPM
 	trustProxy := cfg.Server.TrustProxyHeaders
 
 	// Instantiate memory limiters for public endpoints
@@ -146,6 +182,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	signupIPLimiter := ratelimit.NewMemoryLimiter(signupRPM)
 	signupIPLimiter.StartCleanup(context.Background(), time.Minute)
 
+	forgotIPLimiter := ratelimit.NewMemoryLimiter(forgotPasswordRPM)
+	forgotIPLimiter.StartCleanup(context.Background(), time.Minute)
+
+	resetIPLimiter := ratelimit.NewMemoryLimiter(resetPasswordRPM)
+	resetIPLimiter.StartCleanup(context.Background(), time.Minute)
+
 	adminGroup := r.Group("/admin")
 	if ipAllowlist != nil {
 		adminGroup.Use(ipAllowlist)
@@ -154,6 +196,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	adminGroup.POST("/login", middleware.IPRateLimit(loginIPLimiter, loginRPM, "login", trustProxy), authHandler.Login)
 	adminGroup.POST("/refresh", middleware.IPRateLimit(refreshIPLimiter, refreshRPM, "refresh", trustProxy), authHandler.Refresh)
 	adminGroup.POST("/logout", authHandler.Logout)
+	adminGroup.POST("/forgot-password", middleware.IPRateLimit(forgotIPLimiter, forgotPasswordRPM, "forgot-password", trustProxy), authHandler.ForgotPassword)
+	adminGroup.POST("/reset-password", middleware.IPRateLimit(resetIPLimiter, resetPasswordRPM, "reset-password", trustProxy), authHandler.ResetPassword)
 
 	// Public bootstrap registration.
 	// Disabled after the first admin account is created.
