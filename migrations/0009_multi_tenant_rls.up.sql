@@ -103,9 +103,19 @@ CREATE TRIGGER trg_projects_updated_at BEFORE UPDATE ON projects FOR EACH ROW EX
 -- ============================================================
 -- 4. CREATE DEFAULT PROJECT AND MEMBER BACKFILL
 -- ============================================================
+INSERT INTO admin_users (id, username, password_hash, email)
+VALUES (
+    '00000000-0000-0000-0000-000000000000',
+    'system_admin',
+    '$2a$10$7EqJtq986P4QXh7z.1234567890abcdefghijklmnopqrstuvwxyz',
+    'system_admin@elitegate.local'
+)
+ON CONFLICT DO NOTHING;
+
 INSERT INTO projects (id, name, slug, owner_id)
 SELECT '00000000-0000-0000-0000-000000000000', 'Default Project', 'default', id
 FROM admin_users
+ORDER BY created_at ASC
 LIMIT 1
 ON CONFLICT DO NOTHING;
 
