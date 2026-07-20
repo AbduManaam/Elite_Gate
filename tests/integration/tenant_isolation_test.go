@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"database/sql"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -13,9 +14,23 @@ import (
 	"elitegate/internal/storage"
 )
 
+func testAdminDSN() string {
+	if dsn := os.Getenv("TEST_ADMIN_DATABASE_DSN"); dsn != "" {
+		return dsn
+	}
+	return "postgres://postgres:postgres@127.0.0.1:5433/elitegate_test?sslmode=disable"
+}
+
+func testAppDSN() string {
+	if dsn := os.Getenv("TEST_APP_DATABASE_DSN"); dsn != "" {
+		return dsn
+	}
+	return "postgres://gate_app:gate_app_password@127.0.0.1:5433/elitegate_test?sslmode=disable"
+}
+
 func TestTenantIsolation(t *testing.T) {
 	// Connect to development DB as superuser to set up permissions and test data
-	dsn := "postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable"
+	dsn := testAdminDSN()
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatalf("Failed to open db: %v", err)
@@ -88,7 +103,7 @@ func TestTenantIsolation(t *testing.T) {
 	}()
 
 	// Connect as non-superuser for testing RLS operations
-	testDSN := "postgres://gate_app:gate_app_password@localhost:5433/elitegate_db?sslmode=disable"
+	testDSN := testAppDSN()
 	testDB, err := sql.Open("postgres", testDSN)
 	if err != nil {
 		t.Fatalf("Failed to open gate_app database connection: %v", err)
@@ -198,7 +213,7 @@ func TestTenantIsolation(t *testing.T) {
 
 func TestGatewayListAllForAdmin(t *testing.T) {
 	// Connect to development DB as superuser
-	dsn := "postgres://postgres:9539Abdu@localhost:5433/elitegate_db?sslmode=disable"
+	dsn := testAdminDSN()
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatalf("Failed to open db: %v", err)
