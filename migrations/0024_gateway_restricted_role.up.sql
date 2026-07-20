@@ -11,7 +11,10 @@ BEGIN
     END IF;
 END $$;
 
-GRANT CONNECT ON DATABASE elitegate_db TO elitegate_gateway_user;
+DO $$
+BEGIN
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO elitegate_gateway_user', current_database());
+END $$;
 GRANT USAGE ON SCHEMA public TO elitegate_gateway_user;
 
 -- Read-only, and only on tables the data plane actually needs.
