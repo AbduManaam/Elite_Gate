@@ -6,7 +6,7 @@ services:
     container_name: elitegate_postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 9539Abdu
+      POSTGRES_PASSWORD: postgres_password
       POSTGRES_DB: elitegate_db
     ports:
       - "5433:5432"
