@@ -188,8 +188,7 @@ func (m *DockerContainerManager) Provision(ctx context.Context, gatewayID, proje
 	hostCfg := &container.HostConfig{
 		PortBindings: portBindings,
 		RestartPolicy: container.RestartPolicy{
-			Name:              "on-failure",
-			MaximumRetryCount: 3,
+			Name: "unless-stopped",
 		},
 		Resources: container.Resources{
 			Memory:   256 * 1024 * 1024, // 256 MB hard limit
