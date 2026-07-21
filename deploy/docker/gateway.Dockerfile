@@ -6,10 +6,13 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o gateway ./cmd/gateway
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 COPY --from=builder /app/gateway .
 COPY --from=builder /app/internal/config/config.yaml ./internal/config/config.yaml
 COPY --from=builder /app/migrations ./migrations
+RUN chown -R appuser:appgroup /app
+USER appuser
 EXPOSE 8080 50051
 CMD ["./gateway"]
