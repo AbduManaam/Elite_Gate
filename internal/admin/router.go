@@ -42,6 +42,13 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		})
 	})
 
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "ok",
+			"service": "admin-api",
+		})
+	})
+
 	//  Metrics for Prometheus
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
