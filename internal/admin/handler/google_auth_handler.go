@@ -35,7 +35,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 	// set it as a short-lived HttpOnly cookie so a callback request that
 	// arrives without ANY matching cookie (e.g. a replayed/forged link
 	// opened in a different browser) can be rejected outright.
-	c.SetCookie(oauthStateCookie, state, 600, "/admin/google", "", true, true)
+	c.SetCookie(oauthStateCookie, state, 600, "/admin", "", h.secureCookies, true)
 
 	c.Redirect(http.StatusFound, h.googleOAuth.AuthCodeURL(state, challenge))
 }
@@ -52,7 +52,7 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 	}
 
 	cookieState, err := c.Cookie(oauthStateCookie)
-	c.SetCookie(oauthStateCookie, "", -1, "/admin/google", "", true, true) // always clear it
+	c.SetCookie(oauthStateCookie, "", -1, "/admin", "", h.secureCookies, true) // always clear it
 	if err != nil || cookieState != state {
 		h.logger.Warn().Msg("oauth callback: state cookie mismatch (possible CSRF)")
 		h.redirectWithError(c, frontendURL, "invalid oauth state")
