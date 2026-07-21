@@ -48,13 +48,14 @@ type DockerContainerManager struct {
 	redisPassword string
 	jwtSecret     string
 	imageName     string
+	publicHost    string
 	networkName   string
 	logger        zerolog.Logger
 }
 
 // Creates a Docker container manager connected to the Docker daemon.
 // The caller must call Close() when the manager is no longer needed.
-func NewDockerContainerManager(adminAPIURL, redisAddr, redisPassword, jwtSecret, imageName string) (*DockerContainerManager, error) {
+func NewDockerContainerManager(adminAPIURL, redisAddr, redisPassword, jwtSecret, imageName, publicHost string) (*DockerContainerManager, error) {
 	// Ensure logs directory exists.
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
@@ -89,6 +90,9 @@ func NewDockerContainerManager(adminAPIURL, redisAddr, redisPassword, jwtSecret,
 	if imageName == "" {
 		imageName = "elitegate-gateway:latest"
 	}
+	if publicHost == "" {
+		publicHost = "localhost"
+	}
 
 	m := &DockerContainerManager{
 		client:        cli,
@@ -97,6 +101,7 @@ func NewDockerContainerManager(adminAPIURL, redisAddr, redisPassword, jwtSecret,
 		redisPassword: redisPassword,
 		jwtSecret:     jwtSecret,
 		imageName:     imageName,
+		publicHost:    publicHost,
 		networkName:   gatewayNetworkName,
 		logger:        logger,
 	}
@@ -266,8 +271,8 @@ func (m *DockerContainerManager) inspectEndpoint(ctx context.Context, containerI
 		return "", "", "", "", fmt.Errorf("no port binding found for %s", gatewayContainerPort)
 	}
 	hostPort := bindings[0].HostPort
-	// This is the one users need to actually call the API with, e.g. localhost:50979.
-	publicHost, publicPort = "localhost", hostPort
+	// This is the one users need to actually call the API with, e.g. gateway.domain.com:50979 or localhost:50979.
+	publicHost, publicPort = m.publicHost, hostPort
 
 	// Get the container's IP address from the shared network.
 	// Use the default bridge network IP if needed.

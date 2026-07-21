@@ -33,7 +33,12 @@ func main() {
 	defer db.Close()
 
 	containerMgr, err := container.NewDockerContainerManager(
-		cfg.Server.AdminAPIURL, cfg.Redis.Addr, cfg.Redis.Password, cfg.Auth.JWTSecret, "",
+		cfg.Server.AdminAPIURL,
+		cfg.Redis.Addr,
+		cfg.Redis.Password,
+		cfg.Auth.JWTSecret,
+		cfg.Server.GatewayImageName,
+		cfg.Server.GatewayHostPublic,
 	)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to init container manager")

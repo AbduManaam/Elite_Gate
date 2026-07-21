@@ -35,6 +35,7 @@ type ServerConfig struct {
 	AdminPort           string            `mapstructure:"admin_port"`
 	AdminAPIURL         string            `mapstructure:"admin_api_url"`
 	GatewayImageName    string            `mapstructure:"gateway_image_name"`
+	GatewayHostPublic   string            `mapstructure:"gateway_host_public"`
 	ReadTimeout         string            `mapstructure:"read_timeout"`
 	WriteTimeout        string            `mapstructure:"write_timeout"`
 	IdleTimeout         string            `mapstructure:"idle_timeout"`
@@ -166,6 +167,7 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.admin_port", "ADMIN_PORT")
 	viper.BindEnv("server.admin_api_url", "ADMIN_API_URL")
 	viper.BindEnv("server.gateway_image_name", "GATEWAY_IMAGE_NAME")
+	viper.BindEnv("server.gateway_host_public", "GATEWAY_HOST_PUBLIC")
 	viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	viper.BindEnv("auth.gateway_sync_token", "GATEWAY_SYNC_TOKEN")
 	viper.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_RPM")
