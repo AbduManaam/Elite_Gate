@@ -49,3 +49,40 @@ func TestLoadConfig_AllowedOrigins(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfig_GatewayImageName(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("GATEWAY_IMAGE_NAME")
+	}()
+
+	// 1. Unset GATEWAY_IMAGE_NAME should default to empty string ""
+	os.Unsetenv("GATEWAY_IMAGE_NAME")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.Server.GatewayImageName != "" {
+		t.Errorf("expected GatewayImageName to be empty when unset, got %q", cfg.Server.GatewayImageName)
+	}
+
+	// 2. Set GATEWAY_IMAGE_NAME should populate cfg.Server.GatewayImageName
+	customImage := "123456789012.dkr.ecr.us-east-1.amazonaws.com/elitegate-gateway:v1.2.3"
+	os.Setenv("GATEWAY_IMAGE_NAME", customImage)
+	cfgOverride, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config with GATEWAY_IMAGE_NAME: %v", err)
+	}
+	if cfgOverride.Server.GatewayImageName != customImage {
+		t.Errorf("expected GatewayImageName to be %q, got %q", customImage, cfgOverride.Server.GatewayImageName)
+	}
+}

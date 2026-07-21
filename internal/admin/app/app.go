@@ -52,7 +52,7 @@ func StartApp(cfg *config.Config) (*App, error) {
 		cfg.Redis.Addr,
 		cfg.Redis.Password,
 		cfg.Auth.JWTSecret,
-		"",
+		cfg.Server.GatewayImageName,
 	)
 	if err != nil {
 		_ = db.Close()
