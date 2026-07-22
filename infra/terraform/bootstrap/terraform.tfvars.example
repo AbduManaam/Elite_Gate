@@ -1,0 +1,6 @@
+aws_region        = "ap-south-1"
+project_name      = "elitegate"
+
+# Must be globally unique. Replace 123456789012 with your AWS account ID
+# or another unique suffix.
+state_bucket_name = "elitegate-terraform-state-455540676403"

@@ -1,0 +1,26 @@
+aws_region  = "ap-south-1"
+project_name = "elitegate"
+environment  = "production"
+
+vpc_cidr = "10.20.0.0/16"
+
+public_subnet_cidrs       = ["10.20.0.0/24", "10.20.1.0/24"]
+private_app_subnet_cidrs  = ["10.20.10.0/24", "10.20.11.0/24"]
+private_data_subnet_cidrs = ["10.20.20.0/24", "10.20.21.0/24"]
+
+admin_instance_type    = "t3.small"
+database_instance_class = "db.t4g.micro"
+redis_node_type         = "cache.t4g.micro"
+
+# Fill these after choosing your production domains.
+root_domain_name    = ""
+vercel_frontend_url = ""
+
+
+# Prefer AWS Systems Manager Session Manager instead of opening SSH.
+allowed_ssh_cidr = ""
+
+# Application Load Balancer Configurations
+alb_certificate_arn   = "arn:aws:acm:ap-south-1:123456789012:certificate/example-uuid"
+alb_health_check_path = "/health"
+

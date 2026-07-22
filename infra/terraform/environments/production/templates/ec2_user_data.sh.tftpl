@@ -1,0 +1,24 @@
+#!/bin/bash
+
+set -euxo pipefail
+
+exec > >(tee /var/log/elitegate-user-data.log | logger -t elitegate-user-data -s 2>/dev/console) 2>&1
+
+echo "Starting EliteGate EC2 bootstrap"
+
+dnf update -y
+dnf install -y docker
+
+systemctl enable docker
+systemctl start docker
+
+if id ec2-user >/dev/null 2>&1; then
+  usermod -aG docker ec2-user
+fi
+
+mkdir -p /opt/elitegate
+chown root:root /opt/elitegate
+chmod 0755 /opt/elitegate
+
+echo "AWS region: ${aws_region}"
+echo "EliteGate EC2 bootstrap completed"
