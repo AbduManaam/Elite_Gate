@@ -204,7 +204,7 @@ resource "aws_ssm_parameter" "smtp_enabled" {
   name        = "/elitegate/production/email/enabled"
   description = "Enable or disable SMTP email dispatch"
   type        = "String"
-  value       = "true"
+  value       = "false"
 
   tags = merge(local.common_tags, {
     Name = "elitegate-production-param-smtp-enabled"
