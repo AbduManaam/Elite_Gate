@@ -215,6 +215,10 @@ output "ssm_param_gateway_port_name" {
   value       = aws_ssm_parameter.gateway_port.name
 }
 
+output "github_cd_role_arn" {
+  description = "IAM role ARN used by GitHub Actions CD"
+  value       = aws_iam_role.github_cd.arn
+}
 
 
 

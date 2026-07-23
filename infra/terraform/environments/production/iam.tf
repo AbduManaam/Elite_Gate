@@ -70,6 +70,7 @@ resource "aws_iam_policy" "ec2_secrets_policy" {
           "ssm:GetParametersByPath"
         ]
         Resource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/elitegate/production",
           "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/elitegate/production/*"
         ]
       },
@@ -96,5 +97,14 @@ resource "aws_iam_policy" "ec2_secrets_policy" {
 resource "aws_iam_role_policy_attachment" "ec2_secrets" {
   role       = aws_iam_role.ec2.name
   policy_arn = aws_iam_policy.ec2_secrets_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+resource "aws_iam_role_policy_attachment" "ec2_ecr_read_only" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
