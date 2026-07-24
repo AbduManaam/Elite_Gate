@@ -227,6 +227,14 @@ EOF
   chown root:root "$temporary_env"
   chmod 600 "$temporary_env"
 
+  if grep -Fq "$db_password" "$temporary_env"; then
+    rm -f "$temporary_env"
+    fail "Generated environment file contains an unencoded database password."
+  fi
+
+  grep '^POSTGRES_DSN=' "$temporary_env" |
+    sed -E 's#(postgres://[^:]+:)[^@]+(@.*)#\1***REDACTED***\2#'
+
   mv "$temporary_env" "$ENV_FILE"
 
   log "Production environment file generated securely."
