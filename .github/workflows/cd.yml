@@ -94,12 +94,44 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          # Encode the latest deployment script checked out from this commit.
+          DEPLOY_SCRIPT_BASE64="$(
+            base64 --wrap=0 deploy/scripts/deploy-production.sh
+          )"
+
+          # Build the SSM command parameters safely as JSON.
+          PARAMETERS="$(
+            jq -n \
+              --arg script "$DEPLOY_SCRIPT_BASE64" \
+              --arg admin_image "$ADMIN_IMAGE" \
+              --arg gateway_image "$GATEWAY_IMAGE" \
+              '{
+                commands: [
+                  "sudo mkdir -p /opt/elitegate",
+                  (
+                    "printf %s " +
+                    ($script | @sh) +
+                    " | base64 --decode | sudo tee /opt/elitegate/deploy.sh >/dev/null"
+                  ),
+                  "sudo chmod 750 /opt/elitegate/deploy.sh",
+                  "echo \"Deployment script installed from current Git commit.\"",
+                  "sudo grep -n \"PASSWORD_RESET_URL\" /opt/elitegate/deploy.sh || true",
+                  (
+                    "sudo /opt/elitegate/deploy.sh " +
+                    ($admin_image | @sh) +
+                    " " +
+                    ($gateway_image | @sh)
+                  )
+                ]
+              }'
+          )"
+
           COMMAND_ID="$(
             aws ssm send-command \
               --instance-ids "$EC2_INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
               --comment "Deploy EliteGate ${SOURCE_SHA}" \
-              --parameters "commands=[\"sudo /opt/elitegate/deploy.sh '$ADMIN_IMAGE' '$GATEWAY_IMAGE'\"]" \
+              --parameters "$PARAMETERS" \
               --query "Command.CommandId" \
               --output text
           )"
