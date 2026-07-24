@@ -135,13 +135,28 @@ build_environment_file() {
   db_port="$(jq -r '.port' <<<"$database_json")"
   db_name="$(jq -r '.dbname' <<<"$database_json")"
 
+  local db_username_encoded
+  local db_password_encoded
+
+  db_username_encoded="$(
+    jq -nr --arg value "$db_username" '$value | @uri'
+  )"
+
+  db_password_encoded="$(
+    jq -nr --arg value "$db_password" '$value | @uri'
+  )"
+
   local redis_token
   local redis_endpoint
   local redis_port
+  local redis_token_encoded
 
   redis_token="$(jq -r '.auth_token' <<<"$redis_json")"
   redis_endpoint="$(jq -r '.primary_endpoint' <<<"$redis_json")"
   redis_port="$(jq -r '.port' <<<"$redis_json")"
+  redis_token_encoded="$(
+  jq -nr --arg value "$redis_token" '$value | @uri'
+)"
 
   local jwt_secret
   jwt_secret="$(jq -r '.jwt_secret' <<<"$jwt_json")"
@@ -185,10 +200,10 @@ APP_ENV=${app_environment}
 ADMIN_PORT=${admin_port}
 GATEWAY_PORT=${gateway_port}
 
-POSTGRES_DSN=postgres://${db_username}:${db_password}@${db_host}:${db_port}/${db_name}?sslmode=require
-POSTGRES_GATEWAY_DSN=postgres://${db_username}:${db_password}@${db_host}:${db_port}/${db_name}?sslmode=require
+POSTGRES_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
+POSTGRES_GATEWAY_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
 
-REDIS_ADDR=rediss://:${redis_token}@${redis_endpoint}:${redis_port}
+REDIS_ADDR=rediss://:${redis_token_encoded}@${redis_endpoint}:${redis_port}
 
 JWT_SECRET=${jwt_secret}
 
