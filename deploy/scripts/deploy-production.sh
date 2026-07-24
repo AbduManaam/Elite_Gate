@@ -248,11 +248,24 @@ backup_current_container() {
 start_new_admin() {
   log "Starting the new Admin container..."
 
+  local docker_socket_gid
+
+  [[ -S /var/run/docker.sock ]] ||
+    fail "Docker socket was not found at /var/run/docker.sock."
+
+  docker_socket_gid="$(stat -c '%g' /var/run/docker.sock)"
+
+  [[ "$docker_socket_gid" =~ ^[0-9]+$ ]] ||
+    fail "Could not determine Docker socket group ID."
+
+  log "Granting Admin container access to Docker socket group ID ${docker_socket_gid}."
+
   docker run -d \
     --name "$ADMIN_CONTAINER" \
     --restart unless-stopped \
     --env-file "$ENV_FILE" \
     --network elitegate_net \
+    --group-add "$docker_socket_gid" \
     -p 9090:9090 \
     -v /var/run/docker.sock:/var/run/docker.sock \
     "$ADMIN_IMAGE"
