@@ -196,6 +196,8 @@ build_environment_file() {
 
   cat >"$temporary_env" <<EOF
 APP_ENV=${app_environment}
+ALLOWED_ORIGINS=https://elite-gate-frontend.vercel.app
+FRONTEND_URL=https://elite-gate-frontend.vercel.app
 
 ADMIN_PORT=${admin_port}
 GATEWAY_PORT=${gateway_port}
