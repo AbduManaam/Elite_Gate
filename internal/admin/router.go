@@ -123,6 +123,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	apiKeyRepo := storage.NewApiKeyRepo(db)
 	auditLogRepo := storage.NewAuditLogRepo(db, logger)
 	gatewayRepo := storage.NewGatewayRepo(db)
+	customDomainRepo := storage.NewCustomDomainRepo(db, logger)
 
 	// Services initialized
 	auditSvc := service.NewAuditService(auditLogRepo, logger)
@@ -131,6 +132,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	upstreamSvc := service.NewUpstreamService(upstreamRepo, upstreamTargetRepo, logger)
 	policySvc := service.NewPolicyService(policyRepo, routeRepo, logger)
 	apiKeySvc := service.NewApiKeyService(apiKeyRepo, logger)
+	customDomainSvc := service.NewCustomDomainService(customDomainRepo, logger)
+
 	membershipRepo := storage.NewMembershipRepo(db, logger)
 	membershipSvc := service.NewMembershipService(membershipRepo, logger)
 	membershipHandler := handler.NewMembershipHandler(membershipSvc, logger, auditSvc)
@@ -144,6 +147,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	projectHandler := handler.NewProjectHandler(projectSvc, logger)
 	apiKeyHandler := handler.NewApiKeyHandler(apiKeySvc, logger, auditSvc)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo, logger)
+
+	customDomainHandler := handler.NewCustomDomainHandler(
+		customDomainSvc,
+		logger,
+		auditSvc,
+	)
 	drainTimeout, err := time.ParseDuration(cfg.Server.DrainTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("parse server.drain_timeout: %w", err)
@@ -313,6 +322,20 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				keys.POST("/:id/rotate", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Rotate)
 				keys.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Revoke)
 			}
+			customDomains := projectGroup.Group("/custom-domains")
+			{
+				customDomains.POST(
+					"",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.Create,
+				)
+
+				customDomains.POST(
+					"/:domainId/verify",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.Verify,
+				)
+			}
 			auditLogs := projectGroup.Group("/audit-logs")
 			{
 				auditLogs.GET("", middleware.RBAC(middleware.RoleViewer), auditLogHandler.List)
@@ -352,4 +375,3 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	logger.Debug().Msg("admin router configured")
 	return r, nil
 }
-
