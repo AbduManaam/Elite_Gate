@@ -64,6 +64,7 @@ services:
       dockerfile: deploy/docker/admin.Dockerfile
     image: elitegate-admin:latest
     container_name: elitegate_admin
+    user: root
     ports:
       - "9090:9090"
     env_file:
