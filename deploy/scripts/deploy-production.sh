@@ -201,6 +201,7 @@ FRONTEND_URL=https://elitegateway.site
 
 ADMIN_PORT=${admin_port}
 GATEWAY_PORT=${gateway_port}
+GATEWAY_PUBLIC_HOST=gateway.elitegateway.site
 
 POSTGRES_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
 POSTGRES_GATEWAY_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
