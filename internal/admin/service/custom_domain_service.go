@@ -42,6 +42,15 @@ var (
 	ErrVerificationTokenMismatch = errors.New(
 		"DNS verification token does not match",
 	)
+	ErrCustomDomainNotVerified = errors.New(
+		"custom domain ownership must be verified before checking routing",
+	)
+	ErrCNAMERecordNotFound = errors.New(
+		"DNS CNAME record not found",
+	)
+	ErrCNAMERoutingMismatch = errors.New(
+		"CNAME record does not point to the expected gateway target",
+	)
 )
 
 // CustomDomainRepository defines the storage operations required by CustomDomainService.
@@ -85,31 +94,48 @@ type CustomDomainRepository interface {
 		id uuid.UUID,
 		projectID uuid.UUID,
 	) error
+
+	UpdateRoutingStatus(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+		status string,
+		target string,
+		routingError *string,
+	) (*domain.CustomDomain, error)
 }
 
-// TXTResolver represents a DNS resolver capable of querying TXT records.
+// DNSResolver represents a DNS resolver capable of querying TXT and CNAME records.
 //
 // Using an interface allows the DNS behavior to be mocked in unit tests.
-type TXTResolver interface {
+type DNSResolver interface {
 	LookupTXT(ctx context.Context, name string) ([]string, error)
+	LookupCNAME(ctx context.Context, host string) (string, error)
 }
 
 // CustomDomainService handles custom-domain business logic.
 type CustomDomainService struct {
-	repo     CustomDomainRepository
-	resolver TXTResolver
-	logger   zerolog.Logger
+	repo              CustomDomainRepository
+	resolver          DNSResolver
+	gatewayPublicHost string
+	logger            zerolog.Logger
 }
 
-// NewCustomDomainService creates a CustomDomainService using the system DNS
-// resolver.
+// NewCustomDomainService creates a CustomDomainService with injected DNSResolver.
 func NewCustomDomainService(
 	repo CustomDomainRepository,
+	resolver DNSResolver,
+	gatewayPublicHost string,
 	logger zerolog.Logger,
 ) *CustomDomainService {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+
 	return &CustomDomainService{
-		repo:     repo,
-		resolver: net.DefaultResolver,
+		repo:              repo,
+		resolver:          resolver,
+		gatewayPublicHost: gatewayPublicHost,
 		logger: logger.With().
 			Str("service", "custom_domain").
 			Logger(),
@@ -120,7 +146,8 @@ func NewCustomDomainService(
 // custom DNS resolver. This is mainly useful for unit tests.
 func NewCustomDomainServiceWithResolver(
 	repo CustomDomainRepository,
-	resolver TXTResolver,
+	resolver DNSResolver,
+	gatewayPublicHost string,
 	logger zerolog.Logger,
 ) *CustomDomainService {
 	if resolver == nil {
@@ -128,8 +155,9 @@ func NewCustomDomainServiceWithResolver(
 	}
 
 	return &CustomDomainService{
-		repo:     repo,
-		resolver: resolver,
+		repo:              repo,
+		resolver:          resolver,
+		gatewayPublicHost: gatewayPublicHost,
 		logger: logger.With().
 			Str("service", "custom_domain").
 			Logger(),
@@ -191,6 +219,8 @@ func (s *CustomDomainService) CreateCustomDomain(
 		Status:                 domain.CustomDomainStatusPendingVerification,
 		VerificationTokenHash:  verificationTokenHash,
 		VerificationRecordName: verificationRecordName,
+		RoutingTarget:          &s.gatewayPublicHost,
+		RoutingStatus:          domain.CustomDomainRoutingStatusPending,
 	}
 
 	if err := s.repo.Create(ctx, customDomain); err != nil {
@@ -476,4 +506,75 @@ func (s *CustomDomainService) DeleteCustomDomain(
 		Msg("custom domain soft deleted")
 
 	return nil
+}
+
+// CheckCustomDomainRouting verifies that the custom domain's CNAME record points to the gateway target.
+func (s *CustomDomainService) CheckCustomDomainRouting(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	customDomain, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+		return nil, fmt.Errorf("load custom domain for routing check: %w", err)
+	}
+
+	if customDomain.Status != domain.CustomDomainStatusVerified &&
+		customDomain.Status != domain.CustomDomainStatusActive {
+		return nil, ErrCustomDomainNotVerified
+	}
+
+	expectedTarget := normalizeCNAME(s.gatewayPublicHost)
+
+	resolvedCNAME, err := s.resolver.LookupCNAME(ctx, customDomain.Hostname)
+	if err != nil {
+		errMsg := fmt.Sprintf("DNS CNAME lookup failed: %v", err)
+		_, _ = s.repo.UpdateRoutingStatus(
+			ctx,
+			customDomain.ID,
+			customDomain.ProjectID,
+			domain.CustomDomainRoutingStatusFailed,
+			expectedTarget,
+			&errMsg,
+		)
+		return nil, fmt.Errorf("%w: %v", ErrCNAMERecordNotFound, err)
+	}
+
+	actualTarget := normalizeCNAME(resolvedCNAME)
+
+	if actualTarget != expectedTarget {
+		errMsg := fmt.Sprintf("expected %s, got %s", expectedTarget, actualTarget)
+		_, _ = s.repo.UpdateRoutingStatus(
+			ctx,
+			customDomain.ID,
+			customDomain.ProjectID,
+			domain.CustomDomainRoutingStatusFailed,
+			expectedTarget,
+			&errMsg,
+		)
+		return nil, ErrCNAMERoutingMismatch
+	}
+
+	updatedDomain, err := s.repo.UpdateRoutingStatus(
+		ctx,
+		customDomain.ID,
+		customDomain.ProjectID,
+		domain.CustomDomainRoutingStatusReady,
+		expectedTarget,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update routing status: %w", err)
+	}
+
+	return updatedDomain, nil
+}
+
+func normalizeCNAME(cname string) string {
+	cname = strings.ToLower(strings.TrimSpace(cname))
+	cname = strings.TrimSuffix(cname, ".")
+	return cname
 }

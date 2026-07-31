@@ -99,11 +99,11 @@ func TestLoadConfig_GatewayHostPublic(t *testing.T) {
 	defer func() {
 		os.Unsetenv("POSTGRES_DSN")
 		os.Unsetenv("JWT_SECRET")
-		os.Unsetenv("GATEWAY_HOST_PUBLIC")
+		os.Unsetenv("GATEWAY_PUBLIC_HOST")
 	}()
 
-	// 1. Unset GATEWAY_HOST_PUBLIC should default to empty string ""
-	os.Unsetenv("GATEWAY_HOST_PUBLIC")
+	// 1. Unset GATEWAY_PUBLIC_HOST should default to empty string ""
+	os.Unsetenv("GATEWAY_PUBLIC_HOST")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
@@ -112,12 +112,12 @@ func TestLoadConfig_GatewayHostPublic(t *testing.T) {
 		t.Errorf("expected GatewayHostPublic to be empty when unset, got %q", cfg.Server.GatewayHostPublic)
 	}
 
-	// 2. Set GATEWAY_HOST_PUBLIC should populate cfg.Server.GatewayHostPublic
+	// 2. Set GATEWAY_PUBLIC_HOST should populate cfg.Server.GatewayHostPublic
 	customHost := "gateway.mycompany.com"
-	os.Setenv("GATEWAY_HOST_PUBLIC", customHost)
+	os.Setenv("GATEWAY_PUBLIC_HOST", customHost)
 	cfgOverride, err := LoadConfig()
 	if err != nil {
-		t.Fatalf("failed to load config with GATEWAY_HOST_PUBLIC: %v", err)
+		t.Fatalf("failed to load config with GATEWAY_PUBLIC_HOST: %v", err)
 	}
 	if cfgOverride.Server.GatewayHostPublic != customHost {
 		t.Errorf("expected GatewayHostPublic to be %q, got %q", customHost, cfgOverride.Server.GatewayHostPublic)

@@ -68,7 +68,7 @@ type RedisConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret        string `mapstructure:"jwt_secret"`
+	JWTSecret string `mapstructure:"jwt_secret"`
 	// GatewaySyncToken is a pre-derived HMAC token used by gateway containers
 	// to authenticate against the control-plane /internal/v1/projects/:id/sync
 	// endpoint. If empty, the gateway derives it at startup from JWTSecret + ProjectID.
@@ -167,7 +167,7 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("server.admin_port", "ADMIN_PORT")
 	viper.BindEnv("server.admin_api_url", "ADMIN_API_URL")
 	viper.BindEnv("server.gateway_image_name", "GATEWAY_IMAGE_NAME")
-	viper.BindEnv("server.gateway_host_public", "GATEWAY_HOST_PUBLIC")
+	viper.BindEnv("server.gateway_host_public", "GATEWAY_PUBLIC_HOST")
 	viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	viper.BindEnv("auth.gateway_sync_token", "GATEWAY_SYNC_TOKEN")
 	viper.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_RPM")

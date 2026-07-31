@@ -18,6 +18,12 @@ const (
 	CustomDomainStatusDeleting            = "deleting"
 )
 
+const (
+	CustomDomainRoutingStatusPending = "pending"
+	CustomDomainRoutingStatusReady   = "ready"
+	CustomDomainRoutingStatusFailed  = "failed"
+)
+
 // CustomDomain represents a custom domain entity in the system.
 type CustomDomain struct {
 	ID                     uuid.UUID  `json:"id"`
@@ -35,6 +41,10 @@ type CustomDomain struct {
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 	DeletedAt              *time.Time `json:"-"`
+	RoutingTarget          *string    `json:"routing_target,omitempty"`
+	RoutingStatus          string     `json:"routing_status,omitempty"`
+	RoutingCheckedAt       *time.Time `json:"routing_checked_at,omitempty"`
+	RoutingError           *string    `json:"routing_error,omitempty"`
 }
 
 // VerificationRecord holds details for DNS verification of a custom domain.

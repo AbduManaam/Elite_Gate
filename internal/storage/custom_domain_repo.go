@@ -78,11 +78,14 @@ func (r *CustomDomainRepo) Create(
 			failure_reason,
 			verified_at,
 			activated_at,
-			last_checked_at
+			last_checked_at,
+			routing_target,
+			routing_status
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12
+			$7, $8, $9, $10, $11, $12,
+			$13, $14
 		)
 		RETURNING created_at, updated_at
 	`
@@ -102,6 +105,8 @@ func (r *CustomDomainRepo) Create(
 		customDomain.VerifiedAt,
 		customDomain.ActivatedAt,
 		customDomain.LastCheckedAt,
+		customDomain.RoutingTarget,
+		customDomain.RoutingStatus,
 	).Scan(
 		&customDomain.CreatedAt,
 		&customDomain.UpdatedAt,
@@ -147,7 +152,11 @@ func (r *CustomDomainRepo) GetByID(
 			last_checked_at,
 			created_at,
 			updated_at,
-			deleted_at
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
 		FROM custom_domains
 		WHERE id = $1
 		  AND deleted_at IS NULL
@@ -171,6 +180,10 @@ func (r *CustomDomainRepo) GetByID(
 		&customDomain.CreatedAt,
 		&customDomain.UpdatedAt,
 		&customDomain.DeletedAt,
+		&customDomain.RoutingTarget,
+		&customDomain.RoutingStatus,
+		&customDomain.RoutingCheckedAt,
+		&customDomain.RoutingError,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -205,7 +218,11 @@ func (r *CustomDomainRepo) ListByProject(
 			last_checked_at,
 			created_at,
 			updated_at,
-			deleted_at
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
 		FROM custom_domains
 		WHERE project_id = $1
 		  AND deleted_at IS NULL
@@ -239,6 +256,10 @@ func (r *CustomDomainRepo) ListByProject(
 			&customDomain.CreatedAt,
 			&customDomain.UpdatedAt,
 			&customDomain.DeletedAt,
+			&customDomain.RoutingTarget,
+			&customDomain.RoutingStatus,
+			&customDomain.RoutingCheckedAt,
+			&customDomain.RoutingError,
 		); err != nil {
 			return nil, fmt.Errorf("scan custom domain row: %w", err)
 		}
@@ -276,7 +297,11 @@ func (r *CustomDomainRepo) GetByIDForProject(
 			last_checked_at,
 			created_at,
 			updated_at,
-			deleted_at
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
 		FROM custom_domains
 		WHERE id = $1
 		  AND project_id = $2
@@ -306,6 +331,10 @@ func (r *CustomDomainRepo) GetByIDForProject(
 		&customDomain.CreatedAt,
 		&customDomain.UpdatedAt,
 		&customDomain.DeletedAt,
+		&customDomain.RoutingTarget,
+		&customDomain.RoutingStatus,
+		&customDomain.RoutingCheckedAt,
+		&customDomain.RoutingError,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -354,7 +383,11 @@ func (r *CustomDomainRepo) MarkVerified(
 			last_checked_at,
 			created_at,
 			updated_at,
-			deleted_at
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
 	`
 
 	var customDomain domain.CustomDomain
@@ -381,6 +414,10 @@ func (r *CustomDomainRepo) MarkVerified(
 		&customDomain.CreatedAt,
 		&customDomain.UpdatedAt,
 		&customDomain.DeletedAt,
+		&customDomain.RoutingTarget,
+		&customDomain.RoutingStatus,
+		&customDomain.RoutingCheckedAt,
+		&customDomain.RoutingError,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -473,4 +510,89 @@ func (r *CustomDomainRepo) SoftDelete(
 	}
 
 	return nil
+}
+
+// UpdateRoutingStatus updates the CNAME routing status, target, checked_at, and error for a custom domain.
+func (r *CustomDomainRepo) UpdateRoutingStatus(
+	ctx context.Context,
+	id uuid.UUID,
+	projectID uuid.UUID,
+	status string,
+	target string,
+	routingError *string,
+) (*domain.CustomDomain, error) {
+	const query = `
+		UPDATE custom_domains
+		SET
+			routing_status = $3,
+			routing_target = $4,
+			routing_checked_at = NOW(),
+			routing_error = $5,
+			updated_at = NOW()
+		WHERE id = $1
+		  AND project_id = $2
+		  AND deleted_at IS NULL
+		RETURNING
+			id,
+			project_id,
+			hostname,
+			status,
+			verification_token_hash,
+			verification_record_name,
+			certificate_arn,
+			certificate_status,
+			failure_reason,
+			verified_at,
+			activated_at,
+			last_checked_at,
+			created_at,
+			updated_at,
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
+	`
+
+	var customDomain domain.CustomDomain
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		projectID,
+		status,
+		target,
+		routingError,
+	).Scan(
+		&customDomain.ID,
+		&customDomain.ProjectID,
+		&customDomain.Hostname,
+		&customDomain.Status,
+		&customDomain.VerificationTokenHash,
+		&customDomain.VerificationRecordName,
+		&customDomain.CertificateARN,
+		&customDomain.CertificateStatus,
+		&customDomain.FailureReason,
+		&customDomain.VerifiedAt,
+		&customDomain.ActivatedAt,
+		&customDomain.LastCheckedAt,
+		&customDomain.CreatedAt,
+		&customDomain.UpdatedAt,
+		&customDomain.DeletedAt,
+		&customDomain.RoutingTarget,
+		&customDomain.RoutingStatus,
+		&customDomain.RoutingCheckedAt,
+		&customDomain.RoutingError,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrCustomDomainNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("update custom domain routing status: %w", err)
+	}
+
+	return &customDomain, nil
 }

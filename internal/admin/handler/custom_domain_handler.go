@@ -396,3 +396,91 @@ func (h *CustomDomainHandler) Delete(c *gin.Context) {
 		"id":      customDomainID.String(),
 	})
 }
+
+// CheckRouting verifies the CNAME record for a verified custom domain.
+//
+// Route: POST /admin/v1/projects/:projectId/custom-domains/:domainId/check-routing
+func (h *CustomDomainHandler) CheckRouting(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	verifiedDomain, err := h.svc.CheckCustomDomainRouting(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrCustomDomainNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotVerified):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "custom domain ownership must be verified before checking routing",
+			})
+			return
+
+		case errors.Is(err, service.ErrCNAMERecordNotFound):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "DNS CNAME record was not found",
+			})
+			return
+
+		case errors.Is(err, service.ErrCNAMERoutingMismatch):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "CNAME record does not point to the expected gateway target",
+			})
+			return
+
+		default:
+			helper.RespondInternalError(
+				c,
+				h.logger.With().
+					Str("custom_domain_id", customDomainID.String()).
+					Str("project_id", tenantContext.ProjectID.String()).
+					Logger(),
+				err,
+				"failed to check custom domain routing",
+			)
+			return
+		}
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.Record(
+			c,
+			"custom_domain.check_routing",
+			"custom_domain",
+			verifiedDomain.ID.String(),
+			verifiedDomain.Hostname,
+			gin.H{
+				"routing_status": verifiedDomain.RoutingStatus,
+				"routing_target": verifiedDomain.RoutingTarget,
+			},
+		)
+	}
+
+	h.logger.Info().
+		Str("custom_domain_id", verifiedDomain.ID.String()).
+		Str("project_id", verifiedDomain.ProjectID.String()).
+		Str("hostname", verifiedDomain.Hostname).
+		Msg("custom domain CNAME routing verified")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "custom domain CNAME routing verified successfully",
+		"custom_domain": verifiedDomain,
+	})
+}

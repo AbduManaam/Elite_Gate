@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 
 	"elitegate/internal/admin"
 	adminserver "elitegate/internal/admin/server"
@@ -38,6 +39,9 @@ func StartApp(cfg *config.Config) (*App, error) {
 
 	if cfg.Database.DSN == "" {
 		return nil, fmt.Errorf("database connection DSN (POSTGRES_DSN) is required")
+	}
+	if strings.TrimSpace(cfg.Server.GatewayHostPublic) == "" {
+		return nil, fmt.Errorf("gateway public host (GATEWAY_PUBLIC_HOST) is required")
 	}
 
 	// Connect to postgres using injected database configs

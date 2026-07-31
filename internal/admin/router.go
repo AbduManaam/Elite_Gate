@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -132,7 +133,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	upstreamSvc := service.NewUpstreamService(upstreamRepo, upstreamTargetRepo, logger)
 	policySvc := service.NewPolicyService(policyRepo, routeRepo, logger)
 	apiKeySvc := service.NewApiKeyService(apiKeyRepo, logger)
-	customDomainSvc := service.NewCustomDomainService(customDomainRepo, logger)
+	customDomainSvc := service.NewCustomDomainService(
+		customDomainRepo,
+		net.DefaultResolver,
+		cfg.Server.GatewayHostPublic,
+		logger,
+	)
 
 	membershipRepo := storage.NewMembershipRepo(db, logger)
 	membershipSvc := service.NewMembershipService(membershipRepo, logger)
@@ -352,6 +358,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 					"/:domainId",
 					middleware.RBAC(middleware.RoleOwner),
 					customDomainHandler.Delete,
+				)
+
+				customDomains.POST(
+					"/:domainId/check-routing",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.CheckRouting,
 				)
 			}
 			auditLogs := projectGroup.Group("/audit-logs")

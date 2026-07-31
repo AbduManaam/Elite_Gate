@@ -18,14 +18,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakeTXTResolver struct {
-	records []string
-	err     error
+type fakeDNSResolver struct {
+	records   []string
+	txtErr    error
+	cnameHost string
+	cnameErr  error
 }
 
-func (f *fakeTXTResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	return f.records, f.err
+func (f *fakeDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	return f.records, f.txtErr
 }
+
+func (f *fakeDNSResolver) LookupCNAME(ctx context.Context, host string) (string, error) {
+	return f.cnameHost, f.cnameErr
+}
+
+type fakeTXTResolver = fakeDNSResolver
 
 type fakeCustomDomainRepo struct {
 	domains           map[string]*domain.CustomDomain
@@ -109,6 +117,19 @@ func (f *fakeCustomDomainRepo) RecordVerificationFailure(ctx context.Context, id
 	return nil
 }
 
+func (f *fakeCustomDomainRepo) UpdateRoutingStatus(ctx context.Context, id, projectID uuid.UUID, status string, target string, routingError *string) (*domain.CustomDomain, error) {
+	d, err := f.GetByIDForProject(ctx, id, projectID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	d.RoutingStatus = status
+	d.RoutingTarget = &target
+	d.RoutingCheckedAt = &now
+	d.RoutingError = routingError
+	return d, nil
+}
+
 func TestVerifyCustomDomain_Success(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
@@ -131,7 +152,7 @@ func TestVerifyCustomDomain_Success(t *testing.T) {
 		records: []string{"elitegate-verification=" + rawToken},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	result, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
@@ -166,7 +187,7 @@ func TestVerifyCustomDomain_MultipleTXTRecords(t *testing.T) {
 		},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	result, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
@@ -197,7 +218,7 @@ func TestVerifyCustomDomain_UnrelatedTXTRecordsOnly(t *testing.T) {
 		},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrVerificationTokenMismatch)
@@ -219,10 +240,10 @@ func TestVerifyCustomDomain_RecordNotFound(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d))
 
 	resolver := &fakeTXTResolver{
-		err: &net.DNSError{IsNotFound: true},
+		txtErr: &net.DNSError{IsNotFound: true},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrVerificationRecordNotFound)
@@ -249,7 +270,7 @@ func TestVerifyCustomDomain_TokenMismatch(t *testing.T) {
 		records: []string{"elitegate-verification=wrong-token"},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrVerificationTokenMismatch)
@@ -271,10 +292,10 @@ func TestVerifyCustomDomain_DNSResolverFailure(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d))
 
 	resolver := &fakeTXTResolver{
-		err: errors.New("connection timed out"),
+		txtErr: errors.New("connection timed out"),
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.Error(t, err)
@@ -286,7 +307,7 @@ func TestVerifyCustomDomain_DomainNotFound(t *testing.T) {
 	repo := newFakeCustomDomainRepo()
 	resolver := &fakeTXTResolver{}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), uuid.New(), uuid.New())
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
@@ -310,10 +331,10 @@ func TestVerifyCustomDomain_AlreadyVerifiedIdempotent(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d))
 
 	resolver := &fakeTXTResolver{
-		err: &net.DNSError{IsNotFound: true}, // Resolver won't even be called
+		txtErr: &net.DNSError{IsNotFound: true}, // Resolver won't even be called
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	result, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
@@ -340,7 +361,7 @@ func TestVerifyCustomDomain_ActiveDomainIdempotent(t *testing.T) {
 
 	resolver := &fakeTXTResolver{}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	result, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
@@ -368,7 +389,7 @@ func TestVerifyCustomDomain_TenantIsolation(t *testing.T) {
 		records: []string{"elitegate-verification=hash"},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	// Tenant B attempts to verify Tenant A's domain
 	_, err := svc.VerifyCustomDomain(context.Background(), projectB, d.ID)
 
@@ -398,7 +419,7 @@ func TestVerifyCustomDomain_MarkVerifiedFailure(t *testing.T) {
 		records: []string{"elitegate-verification=" + rawToken},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.Error(t, err)
@@ -436,7 +457,7 @@ func TestVerifyCustomDomain_FailureReasonRecordedOnMismatch(t *testing.T) {
 		records: []string{"elitegate-verification=wrong-token"},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrVerificationTokenMismatch)
@@ -463,10 +484,10 @@ func TestVerifyCustomDomain_FailureReasonRecordedOnMissingRecord(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d))
 
 	resolver := &fakeTXTResolver{
-		err: &net.DNSError{IsNotFound: true},
+		txtErr: &net.DNSError{IsNotFound: true},
 	}
 
-	svc := NewCustomDomainServiceWithResolver(repo, resolver, logger)
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, "gateway.elitegateway.site", logger)
 	_, err := svc.VerifyCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrVerificationRecordNotFound)
@@ -497,7 +518,7 @@ func TestListCustomDomains_Success(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d1))
 	require.NoError(t, repo.Create(context.Background(), d2))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	domains, err := svc.ListCustomDomains(context.Background(), projectID)
 
 	require.NoError(t, err)
@@ -509,7 +530,7 @@ func TestListCustomDomains_EmptyList(t *testing.T) {
 	repo := newFakeCustomDomainRepo()
 	projectID := uuid.New()
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	domains, err := svc.ListCustomDomains(context.Background(), projectID)
 
 	require.NoError(t, err)
@@ -535,7 +556,7 @@ func TestListCustomDomains_ExcludesDeleted(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d1))
 	require.NoError(t, repo.Create(context.Background(), d2))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	require.NoError(t, svc.DeleteCustomDomain(context.Background(), projectID, d2.ID))
 
 	domains, err := svc.ListCustomDomains(context.Background(), projectID)
@@ -557,7 +578,7 @@ func TestGetCustomDomain_Success(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	result, err := svc.GetCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
@@ -570,7 +591,7 @@ func TestGetCustomDomain_NotFound(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	_, err := svc.GetCustomDomain(context.Background(), uuid.New(), uuid.New())
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
@@ -589,7 +610,7 @@ func TestGetCustomDomain_WrongProject(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	_, err := svc.GetCustomDomain(context.Background(), projectB, d.ID)
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
@@ -607,7 +628,7 @@ func TestDeleteCustomDomain_Success(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	err := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
 	require.NoError(t, err)
 
@@ -627,7 +648,7 @@ func TestDeleteCustomDomain_DoubleDelete(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	require.NoError(t, svc.DeleteCustomDomain(context.Background(), projectID, d.ID))
 
 	// Second delete attempt must return ErrCustomDomainNotFound (404)
@@ -648,7 +669,7 @@ func TestDeleteCustomDomain_WrongProject(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, logger)
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
 	err := svc.DeleteCustomDomain(context.Background(), projectB, d.ID)
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
 
@@ -674,4 +695,197 @@ func TestVerificationTokenHashNeverReturnedInJSON(t *testing.T) {
 	assert.NotContains(t, jsonStr, "verification_token_hash")
 	assert.NotContains(t, jsonStr, "super-secret-hash-12345")
 	assert.NotContains(t, jsonStr, "deleted_at")
+}
+
+func TestCheckCustomDomainRouting_VerifiedCorrectCNAME(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "api.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: "gateway.elitegateway.site.",
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	result, err := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, domain.CustomDomainRoutingStatusReady, result.RoutingStatus)
+	assert.Equal(t, targetHost, *result.RoutingTarget)
+	assert.Nil(t, result.RoutingError)
+	assert.NotNil(t, result.RoutingCheckedAt)
+}
+
+func TestCheckCustomDomainRouting_VerifiedIncorrectCNAME(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "mismatch.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: "wrong.target.com.",
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	_, err := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCNAMERoutingMismatch)
+
+	stored, getErr := repo.GetByIDForProject(context.Background(), d.ID, projectID)
+	require.NoError(t, getErr)
+	assert.Equal(t, domain.CustomDomainRoutingStatusFailed, stored.RoutingStatus)
+	assert.NotNil(t, stored.RoutingError)
+	assert.Contains(t, *stored.RoutingError, "expected gateway.elitegateway.site, got wrong.target.com")
+}
+
+func TestCheckCustomDomainRouting_VerifiedMissingCNAME(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "missing.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameErr: &net.DNSError{IsNotFound: true},
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	_, err := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCNAMERecordNotFound)
+
+	stored, getErr := repo.GetByIDForProject(context.Background(), d.ID, projectID)
+	require.NoError(t, getErr)
+	assert.Equal(t, domain.CustomDomainRoutingStatusFailed, stored.RoutingStatus)
+	assert.NotNil(t, stored.RoutingError)
+}
+
+func TestCheckCustomDomainRouting_PendingTXTVerification(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "unverified.example.com",
+		Status:    domain.CustomDomainStatusPendingVerification,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: targetHost,
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	_, err := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainNotVerified)
+}
+
+func TestCheckCustomDomainRouting_WrongProject(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectA := uuid.New()
+	projectB := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectA,
+		Hostname:  "projecta.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: targetHost,
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	_, err := svc.CheckCustomDomainRouting(context.Background(), projectB, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
+}
+
+func TestCheckCustomDomainRouting_RepeatedCheckIdempotent(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "gateway.elitegateway.site"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "idempotent.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: targetHost,
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+
+	// First check -> ready
+	result1, err1 := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+	require.NoError(t, err1)
+	assert.Equal(t, domain.CustomDomainRoutingStatusReady, result1.RoutingStatus)
+
+	// Second check -> remains ready, returns 200 OK without error
+	result2, err2 := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+	require.NoError(t, err2)
+	assert.Equal(t, domain.CustomDomainRoutingStatusReady, result2.RoutingStatus)
+}
+
+func TestCheckCustomDomainRouting_Normalization(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	targetHost := "GATEWAY.ELITEGATEWAY.SITE"
+
+	d := &domain.CustomDomain{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Hostname:  "norm.example.com",
+		Status:    domain.CustomDomainStatusVerified,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	resolver := &fakeDNSResolver{
+		cnameHost: "gateway.elitegateway.site.", // trailing dot & lowercase
+	}
+
+	svc := NewCustomDomainServiceWithResolver(repo, resolver, targetHost, logger)
+	result, err := svc.CheckCustomDomainRouting(context.Background(), projectID, d.ID)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.CustomDomainRoutingStatusReady, result.RoutingStatus)
 }
