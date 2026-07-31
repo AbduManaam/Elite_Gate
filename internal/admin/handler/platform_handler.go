@@ -129,8 +129,8 @@ func (h *PlatformHandler) PlatformHealth(c *gin.Context) {
 	probeResults := h.probeActiveGateways(ctx, activeGateways)
 
 	c.JSON(http.StatusOK, gin.H{
-		"projects":        projectCounts,
-		"gateways":        gatewayCounts,
+		"projects":       projectCounts,
+		"gateways":       gatewayCounts,
 		"gateway_probes": probeResults,
 	})
 }

@@ -15,7 +15,7 @@ var (
 	ErrInvalidProtocol   = errors.New("protocol must be 'http' or 'grpc'")
 	ErrInvalidLBStrategy = errors.New("lb_strategy must be 'round_robin' or 'least_conn'")
 
-	validProtocols   = map[string]bool{"http": true, "grpc": true}
+	validProtocols    = map[string]bool{"http": true, "grpc": true}
 	validLBStrategies = map[string]bool{"round_robin": true, "least_conn": true}
 )
 

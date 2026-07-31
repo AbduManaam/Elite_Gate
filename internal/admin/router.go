@@ -324,6 +324,18 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 			}
 			customDomains := projectGroup.Group("/custom-domains")
 			{
+				customDomains.GET(
+					"",
+					middleware.RBAC(middleware.RoleViewer),
+					customDomainHandler.List,
+				)
+
+				customDomains.GET(
+					"/:domainId",
+					middleware.RBAC(middleware.RoleViewer),
+					customDomainHandler.Get,
+				)
+
 				customDomains.POST(
 					"",
 					middleware.RBAC(middleware.RoleOwner),
@@ -334,6 +346,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 					"/:domainId/verify",
 					middleware.RBAC(middleware.RoleOwner),
 					customDomainHandler.Verify,
+				)
+
+				customDomains.DELETE(
+					"/:domainId",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.Delete,
 				)
 			}
 			auditLogs := projectGroup.Group("/audit-logs")

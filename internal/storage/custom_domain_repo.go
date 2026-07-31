@@ -441,3 +441,36 @@ func (r *CustomDomainRepo) RecordVerificationFailure(
 
 	return nil
 }
+
+// SoftDelete soft deletes a custom domain by setting deleted_at to NOW().
+func (r *CustomDomainRepo) SoftDelete(
+	ctx context.Context,
+	id uuid.UUID,
+	projectID uuid.UUID,
+) error {
+	const query = `
+		UPDATE custom_domains
+		SET
+			deleted_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+		  AND project_id = $2
+		  AND deleted_at IS NULL
+	`
+
+	result, err := r.db.ExecContext(ctx, query, id, projectID)
+	if err != nil {
+		return fmt.Errorf("soft delete custom domain: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read soft delete rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrCustomDomainNotFound
+	}
+
+	return nil
+}

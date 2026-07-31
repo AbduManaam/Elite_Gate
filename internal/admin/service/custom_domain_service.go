@@ -62,6 +62,11 @@ type CustomDomainRepository interface {
 		projectID uuid.UUID,
 	) (*domain.CustomDomain, error)
 
+	ListByProject(
+		ctx context.Context,
+		projectID uuid.UUID,
+	) ([]domain.CustomDomain, error)
+
 	MarkVerified(
 		ctx context.Context,
 		id uuid.UUID,
@@ -73,6 +78,12 @@ type CustomDomainRepository interface {
 		id uuid.UUID,
 		projectID uuid.UUID,
 		reason string,
+	) error
+
+	SoftDelete(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
 	) error
 }
 
@@ -403,4 +414,66 @@ func generateCustomDomainVerificationToken() (string, error) {
 func hashCustomDomainVerificationToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// ListCustomDomains returns all active (non-deleted) custom domains for a project.
+func (s *CustomDomainService) ListCustomDomains(
+	ctx context.Context,
+	projectID uuid.UUID,
+) ([]domain.CustomDomain, error) {
+	customDomains, err := s.repo.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list custom domains: %w", err)
+	}
+
+	return customDomains, nil
+}
+
+// GetCustomDomain retrieves a single active custom domain by ID and project ID.
+func (s *CustomDomainService) GetCustomDomain(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	customDomain, err := s.repo.GetByIDForProject(
+		ctx,
+		customDomainID,
+		projectID,
+	)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+
+		return nil, fmt.Errorf("get custom domain: %w", err)
+	}
+
+	return customDomain, nil
+}
+
+// DeleteCustomDomain soft deletes a custom domain for a project.
+func (s *CustomDomainService) DeleteCustomDomain(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) error {
+	err := s.repo.SoftDelete(
+		ctx,
+		customDomainID,
+		projectID,
+	)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return ErrCustomDomainNotFound
+		}
+
+		return fmt.Errorf("delete custom domain: %w", err)
+	}
+
+	s.logger.Info().
+		Str("custom_domain_id", customDomainID.String()).
+		Str("project_id", projectID.String()).
+		Msg("custom domain soft deleted")
+
+	return nil
 }

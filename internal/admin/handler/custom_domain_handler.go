@@ -228,3 +228,171 @@ func (h *CustomDomainHandler) Verify(c *gin.Context) {
 		"custom_domain": verifiedDomain,
 	})
 }
+
+// getTenantContext extracts and validates the tenant context from Gin context.
+func (h *CustomDomainHandler) getTenantContext(c *gin.Context) (storage.TenantContext, bool) {
+	tenantContextValue, exists := c.Get("tenant_ctx")
+	if !exists {
+		helper.RespondInternalError(
+			c,
+			h.logger,
+			nil,
+			"internal tenant context missing",
+		)
+		return storage.TenantContext{}, false
+	}
+
+	tenantContext, ok := tenantContextValue.(storage.TenantContext)
+	if !ok {
+		helper.RespondInternalError(
+			c,
+			h.logger,
+			nil,
+			"invalid tenant context",
+		)
+		return storage.TenantContext{}, false
+	}
+
+	return tenantContext, true
+}
+
+// List returns all custom domains for the project in the current tenant context.
+//
+// Route: GET /admin/v1/projects/:projectId/custom-domains
+func (h *CustomDomainHandler) List(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	domains, err := h.svc.ListCustomDomains(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+	)
+	if err != nil {
+		helper.RespondInternalError(
+			c,
+			h.logger.With().
+				Str("project_id", tenantContext.ProjectID.String()).
+				Logger(),
+			err,
+			"failed to list custom domains",
+		)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"custom_domains": domains,
+	})
+}
+
+// Get returns a single custom domain by ID for the project in the current tenant context.
+//
+// Route: GET /admin/v1/projects/:projectId/custom-domains/:domainId
+func (h *CustomDomainHandler) Get(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	customDomain, err := h.svc.GetCustomDomain(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrCustomDomainNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+		}
+
+		helper.RespondInternalError(
+			c,
+			h.logger.With().
+				Str("custom_domain_id", customDomainID.String()).
+				Str("project_id", tenantContext.ProjectID.String()).
+				Logger(),
+			err,
+			"failed to get custom domain",
+		)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"custom_domain": customDomain,
+	})
+}
+
+// Delete soft-deletes a custom domain for the project in the current tenant context.
+//
+// Route: DELETE /admin/v1/projects/:projectId/custom-domains/:domainId
+func (h *CustomDomainHandler) Delete(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	err = h.svc.DeleteCustomDomain(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrCustomDomainNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+		}
+
+		helper.RespondInternalError(
+			c,
+			h.logger.With().
+				Str("custom_domain_id", customDomainID.String()).
+				Str("project_id", tenantContext.ProjectID.String()).
+				Logger(),
+			err,
+			"failed to delete custom domain",
+		)
+		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.Record(
+			c,
+			"custom_domain.delete",
+			"custom_domain",
+			customDomainID.String(),
+			"",
+			nil,
+		)
+	}
+
+	h.logger.Info().
+		Str("custom_domain_id", customDomainID.String()).
+		Str("project_id", tenantContext.ProjectID.String()).
+		Msg("custom domain deleted")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "custom domain deleted successfully",
+		"id":      customDomainID.String(),
+	})
+}

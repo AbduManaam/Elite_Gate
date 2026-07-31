@@ -31,11 +31,11 @@ type TenantAPIKeyDTO struct {
 // POSTGRES_DSN is removed from the gateway — the gateway must get keys
 // from here and self-populate its Redis cache instead.
 type TenantSnapshotDTO struct {
-	ProjectID uuid.UUID                          `json:"project_id"`
-	Routes    []model.Route                      `json:"routes"`
-	Upstreams []model.Upstream                   `json:"upstreams"`
-	Targets   map[string][]model.UpstreamTarget  `json:"targets"`
-	APIKeys   []TenantAPIKeyDTO                  `json:"api_keys"`
+	ProjectID uuid.UUID                         `json:"project_id"`
+	Routes    []model.Route                     `json:"routes"`
+	Upstreams []model.Upstream                  `json:"upstreams"`
+	Targets   map[string][]model.UpstreamTarget `json:"targets"`
+	APIKeys   []TenantAPIKeyDTO                 `json:"api_keys"`
 }
 
 type TenantSyncHandler struct {
