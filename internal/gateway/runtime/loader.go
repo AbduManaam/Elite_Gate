@@ -11,6 +11,7 @@ import (
 
 	"elitegate/helper"
 	"elitegate/internal/auth"
+	"elitegate/internal/domain"
 	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/loadbalancer"
 )
@@ -202,6 +203,10 @@ func (l *Loader) buildDomainMap(snap *TenantSnapshot) map[string]DomainContext {
 	for _, cd := range snap.CustomDomains {
 		norm := NormalizeHost(cd.Hostname)
 		if norm == "" {
+			continue
+		}
+		if cd.Status != domain.CustomDomainStatusActive ||
+			cd.RoutingStatus != domain.CustomDomainRoutingStatusReady {
 			continue
 		}
 		domainMap[norm] = DomainContext{

@@ -365,6 +365,12 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 					middleware.RBAC(middleware.RoleOwner),
 					customDomainHandler.CheckRouting,
 				)
+
+				customDomains.POST(
+					"/:domainId/activate",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.Activate,
+				)
 			}
 			auditLogs := projectGroup.Group("/audit-logs")
 			{

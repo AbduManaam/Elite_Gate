@@ -598,8 +598,88 @@ func (r *CustomDomainRepo) UpdateRoutingStatus(
 	return &customDomain, nil
 }
 
+// MarkActive updates a custom domain status to active if verified and routing-ready.
+func (r *CustomDomainRepo) MarkActive(
+	ctx context.Context,
+	id uuid.UUID,
+	projectID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	const query = `
+		UPDATE custom_domains
+		SET
+			status = $3,
+			activated_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+		  AND project_id = $2
+		  AND deleted_at IS NULL
+		  AND status = 'verified'
+		  AND routing_status = 'ready'
+		RETURNING
+			id,
+			project_id,
+			hostname,
+			status,
+			verification_token_hash,
+			verification_record_name,
+			certificate_arn,
+			certificate_status,
+			failure_reason,
+			verified_at,
+			activated_at,
+			last_checked_at,
+			created_at,
+			updated_at,
+			deleted_at,
+			routing_target,
+			routing_status,
+			routing_checked_at,
+			routing_error
+	`
+
+	var customDomain domain.CustomDomain
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		projectID,
+		domain.CustomDomainStatusActive,
+	).Scan(
+		&customDomain.ID,
+		&customDomain.ProjectID,
+		&customDomain.Hostname,
+		&customDomain.Status,
+		&customDomain.VerificationTokenHash,
+		&customDomain.VerificationRecordName,
+		&customDomain.CertificateARN,
+		&customDomain.CertificateStatus,
+		&customDomain.FailureReason,
+		&customDomain.VerifiedAt,
+		&customDomain.ActivatedAt,
+		&customDomain.LastCheckedAt,
+		&customDomain.CreatedAt,
+		&customDomain.UpdatedAt,
+		&customDomain.DeletedAt,
+		&customDomain.RoutingTarget,
+		&customDomain.RoutingStatus,
+		&customDomain.RoutingCheckedAt,
+		&customDomain.RoutingError,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrCustomDomainNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("mark custom domain active: %w", err)
+	}
+
+	return &customDomain, nil
+}
+
 // ListEligibleSyncDomains returns all non-deleted custom domains for a project
-// that are verified and routing-ready, ordered stably by creation timestamp.
+// that are active and routing-ready, ordered stably by creation timestamp.
 func (r *CustomDomainRepo) ListEligibleSyncDomains(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -612,7 +692,7 @@ func (r *CustomDomainRepo) ListEligibleSyncDomains(
 		FROM custom_domains
 		WHERE project_id = $1
 		  AND deleted_at IS NULL
-		  AND status = 'verified'
+		  AND status = 'active'
 		  AND routing_status = 'ready'
 		ORDER BY created_at ASC
 	`

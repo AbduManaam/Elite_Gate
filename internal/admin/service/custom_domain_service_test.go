@@ -130,6 +130,20 @@ func (f *fakeCustomDomainRepo) UpdateRoutingStatus(ctx context.Context, id, proj
 	return d, nil
 }
 
+func (f *fakeCustomDomainRepo) MarkActive(ctx context.Context, id, projectID uuid.UUID) (*domain.CustomDomain, error) {
+	d, err := f.GetByIDForProject(ctx, id, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if d.Status != domain.CustomDomainStatusVerified || d.RoutingStatus != domain.CustomDomainRoutingStatusReady {
+		return nil, storage.ErrCustomDomainNotFound
+	}
+	d.Status = domain.CustomDomainStatusActive
+	now := time.Now()
+	d.ActivatedAt = &now
+	return d, nil
+}
+
 func TestVerifyCustomDomain_Success(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
@@ -888,4 +902,133 @@ func TestCheckCustomDomainRouting_Normalization(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.CustomDomainRoutingStatusReady, result.RoutingStatus)
+}
+
+func TestActivateCustomDomain_VerifiedAndReady_Success(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "activate.example.com",
+		Status:        domain.CustomDomainStatusVerified,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	result, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, domain.CustomDomainStatusActive, result.Status)
+	assert.NotNil(t, result.ActivatedAt)
+}
+
+func TestActivateCustomDomain_AlreadyActiveAndReady_Idempotent(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	now := time.Now()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "idempotent.example.com",
+		Status:        domain.CustomDomainStatusActive,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+		ActivatedAt:   &now,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	result, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, domain.CustomDomainStatusActive, result.Status)
+}
+
+func TestActivateCustomDomain_RoutingNotReady(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "routingpending.example.com",
+		Status:        domain.CustomDomainStatusVerified,
+		RoutingStatus: domain.CustomDomainRoutingStatusPending,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainRoutingNotReady)
+}
+
+func TestActivateCustomDomain_PendingVerification(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "unverified.example.com",
+		Status:        domain.CustomDomainStatusPendingVerification,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainNotVerified)
+}
+
+func TestActivateCustomDomain_DeletedDomain(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "deleted.example.com",
+		Status:        domain.CustomDomainStatusVerified,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+	require.NoError(t, repo.SoftDelete(context.Background(), d.ID, projectID))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
+}
+
+func TestActivateCustomDomain_WrongProject(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectA := uuid.New()
+	projectB := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectA,
+		Hostname:      "projecta.example.com",
+		Status:        domain.CustomDomainStatusVerified,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	_, err := svc.ActivateCustomDomain(context.Background(), projectB, d.ID)
+
+	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
 }

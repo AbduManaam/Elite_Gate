@@ -51,6 +51,9 @@ var (
 	ErrCNAMERoutingMismatch = errors.New(
 		"CNAME record does not point to the expected gateway target",
 	)
+	ErrCustomDomainRoutingNotReady = errors.New(
+		"custom domain routing status must be ready before activation",
+	)
 )
 
 // CustomDomainRepository defines the storage operations required by CustomDomainService.
@@ -77,6 +80,12 @@ type CustomDomainRepository interface {
 	) ([]domain.CustomDomain, error)
 
 	MarkVerified(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+	) (*domain.CustomDomain, error)
+
+	MarkActive(
 		ctx context.Context,
 		id uuid.UUID,
 		projectID uuid.UUID,
@@ -577,4 +586,51 @@ func normalizeCNAME(cname string) string {
 	cname = strings.ToLower(strings.TrimSpace(cname))
 	cname = strings.TrimSuffix(cname, ".")
 	return cname
+}
+
+// ActivateCustomDomain promotes a verified and routing-ready domain to active status.
+// If the domain is already active and routing is ready, it idempotently returns the existing domain.
+func (s *CustomDomainService) ActivateCustomDomain(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	customDomain, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+		return nil, fmt.Errorf("load custom domain for activation: %w", err)
+	}
+
+	if customDomain.Status == domain.CustomDomainStatusActive {
+		if customDomain.RoutingStatus == domain.CustomDomainRoutingStatusReady {
+			return customDomain, nil
+		}
+		return nil, ErrCustomDomainRoutingNotReady
+	}
+
+	if customDomain.Status != domain.CustomDomainStatusVerified {
+		return nil, ErrCustomDomainNotVerified
+	}
+
+	if customDomain.RoutingStatus != domain.CustomDomainRoutingStatusReady {
+		return nil, ErrCustomDomainRoutingNotReady
+	}
+
+	activatedDomain, err := s.repo.MarkActive(ctx, customDomainID, projectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+		return nil, fmt.Errorf("mark custom domain active: %w", err)
+	}
+
+	s.logger.Info().
+		Str("custom_domain_id", activatedDomain.ID.String()).
+		Str("project_id", activatedDomain.ProjectID.String()).
+		Str("hostname", activatedDomain.Hostname).
+		Msg("custom domain activated")
+
+	return activatedDomain, nil
 }

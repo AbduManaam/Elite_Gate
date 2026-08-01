@@ -484,3 +484,85 @@ func (h *CustomDomainHandler) CheckRouting(c *gin.Context) {
 		"custom_domain": verifiedDomain,
 	})
 }
+
+// Activate promotes a verified and routing-ready custom domain to active status.
+//
+// Route: POST /admin/v1/projects/:projectId/custom-domains/:domainId/activate
+func (h *CustomDomainHandler) Activate(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	activatedDomain, err := h.svc.ActivateCustomDomain(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrCustomDomainNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotVerified):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain must be verified before activation",
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainRoutingNotReady):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain routing status must be ready before activation",
+			})
+			return
+
+		default:
+			helper.RespondInternalError(
+				c,
+				h.logger.With().
+					Str("custom_domain_id", customDomainID.String()).
+					Str("project_id", tenantContext.ProjectID.String()).
+					Logger(),
+				err,
+				"failed to activate custom domain",
+			)
+			return
+		}
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.Record(
+			c,
+			"custom_domain.activate",
+			"custom_domain",
+			activatedDomain.ID.String(),
+			activatedDomain.Hostname,
+			gin.H{
+				"status":         activatedDomain.Status,
+				"routing_status": activatedDomain.RoutingStatus,
+			},
+		)
+	}
+
+	h.logger.Info().
+		Str("custom_domain_id", activatedDomain.ID.String()).
+		Str("project_id", activatedDomain.ProjectID.String()).
+		Str("hostname", activatedDomain.Hostname).
+		Msg("custom domain activated")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "custom domain activated successfully",
+		"custom_domain": activatedDomain,
+	})
+}

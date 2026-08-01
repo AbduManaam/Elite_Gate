@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"testing"
+
+	"elitegate/internal/model"
 )
 
 func TestNormalizeHost(t *testing.T) {
@@ -124,4 +126,45 @@ func TestSnapshot_LookupDomain(t *testing.T) {
 			t.Errorf("expected no match for unknown domain")
 		}
 	})
+}
+
+func TestLoader_BuildDomainMap_ActiveOnly(t *testing.T) {
+	loader := &Loader{}
+	snap := &TenantSnapshot{
+		CustomDomains: []model.CustomDomainSync{
+			{
+				Hostname:      "active-ready.com",
+				Status:        "active",
+				RoutingStatus: "ready",
+			},
+			{
+				Hostname:      "verified-ready.com",
+				Status:        "verified",
+				RoutingStatus: "ready",
+			},
+			{
+				Hostname:      "active-pending.com",
+				Status:        "active",
+				RoutingStatus: "pending",
+			},
+		},
+	}
+
+	domainMap := loader.buildDomainMap(snap)
+
+	if len(domainMap) != 1 {
+		t.Fatalf("expected exactly 1 active domain in map, got %d", len(domainMap))
+	}
+
+	if _, ok := domainMap["active-ready.com"]; !ok {
+		t.Errorf("expected active-ready.com to be present in domainMap")
+	}
+
+	if _, ok := domainMap["verified-ready.com"]; ok {
+		t.Errorf("expected verified-ready.com to be excluded from domainMap")
+	}
+
+	if _, ok := domainMap["active-pending.com"]; ok {
+		t.Errorf("expected active-pending.com to be excluded from domainMap")
+	}
 }
