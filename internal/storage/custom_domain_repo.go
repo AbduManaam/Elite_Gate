@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"elitegate/internal/domain"
+	"elitegate/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -595,4 +596,45 @@ func (r *CustomDomainRepo) UpdateRoutingStatus(
 	}
 
 	return &customDomain, nil
+}
+
+// ListEligibleSyncDomains returns all non-deleted custom domains for a project
+// that are verified and routing-ready, ordered stably by creation timestamp.
+func (r *CustomDomainRepo) ListEligibleSyncDomains(
+	ctx context.Context,
+	projectID uuid.UUID,
+) ([]model.CustomDomainSync, error) {
+	const query = `
+		SELECT
+			hostname,
+			status,
+			routing_status
+		FROM custom_domains
+		WHERE project_id = $1
+		  AND deleted_at IS NULL
+		  AND status = 'verified'
+		  AND routing_status = 'ready'
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible custom domains for sync: %w", err)
+	}
+	defer rows.Close()
+
+	domains := make([]model.CustomDomainSync, 0)
+	for rows.Next() {
+		var d model.CustomDomainSync
+		if err := rows.Scan(&d.Hostname, &d.Status, &d.RoutingStatus); err != nil {
+			return nil, fmt.Errorf("scan eligible custom domain sync row: %w", err)
+		}
+		domains = append(domains, d)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate eligible custom domain sync rows: %w", err)
+	}
+
+	return domains, nil
 }

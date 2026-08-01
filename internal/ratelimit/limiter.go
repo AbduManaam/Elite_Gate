@@ -21,4 +21,3 @@ type Limiter interface {
 	// it evaluates and (if allowed) records the request in a single call.
 	CheckAndConsume(key string, limit int) RateResult
 }
-

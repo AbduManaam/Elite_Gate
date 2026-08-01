@@ -13,7 +13,7 @@ import (
 func TestMemoryLimiter_BasicAndSliding(t *testing.T) {
 	lim := NewMemoryLimiter(3)
 	t0 := time.Now()
-	
+
 	// Override the clock function to control time precisely
 	var mockTime = t0
 	lim.now = func() time.Time {
@@ -97,7 +97,7 @@ func TestMemoryLimiter_Cleanup(t *testing.T) {
 	// Start cleanup manually in context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Move clock forward past sliding window (60s)
 	mockTime = t0.Add(61 * time.Second)
 

@@ -39,6 +39,9 @@ func TestControlPlaneClient(t *testing.T) {
 			APIKeys: []TenantAPIKeyDTO{
 				{KeyHash: "hash-123", Roles: []string{"viewer"}, Scopes: []string{"read"}},
 			},
+			CustomDomains: []model.CustomDomainSync{
+				{Hostname: "test-api.elitegateway.site", Status: "verified", RoutingStatus: "ready"},
+			},
 		}
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +75,9 @@ func TestControlPlaneClient(t *testing.T) {
 		}
 		if len(snapshot.APIKeys) != 1 || snapshot.APIKeys[0].KeyHash != "hash-123" {
 			t.Errorf("unexpected API keys fetched")
+		}
+		if len(snapshot.CustomDomains) != 1 || snapshot.CustomDomains[0].Hostname != "test-api.elitegateway.site" {
+			t.Errorf("unexpected CustomDomains fetched")
 		}
 	})
 

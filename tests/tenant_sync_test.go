@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -52,18 +53,40 @@ func (s *mockTenantSyncDBStmt) Close() error  { return nil }
 func (s *mockTenantSyncDBStmt) NumInput() int { return -1 }
 
 func (s *mockTenantSyncDBStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return &mockTenantSyncRows{}, nil
+	return &mockTenantSyncRows{query: s.query}, nil
 }
 
 func (s *mockTenantSyncDBStmt) Exec(args []driver.Value) (driver.Result, error) {
 	return &mockTenantSyncResult{1}, nil
 }
 
-type mockTenantSyncRows struct{}
+type mockTenantSyncRows struct {
+	query string
+	read  bool
+}
 
-func (mockTenantSyncRows) Columns() []string              { return []string{"id"} }
-func (mockTenantSyncRows) Close() error                   { return nil }
-func (mockTenantSyncRows) Next(dest []driver.Value) error { return io.EOF }
+func (r *mockTenantSyncRows) Columns() []string {
+	if r.query != "" && strings.Contains(r.query, "custom_domains") {
+		return []string{"hostname", "status", "routing_status"}
+	}
+	if r.query != "" && strings.Contains(r.query, "COUNT(*)") {
+		return []string{"count"}
+	}
+	return []string{"id"}
+}
+
+func (r *mockTenantSyncRows) Close() error { return nil }
+
+func (r *mockTenantSyncRows) Next(dest []driver.Value) error {
+	if r.query != "" && strings.Contains(r.query, "COUNT(*)") {
+		if !r.read {
+			r.read = true
+			dest[0] = int64(0)
+			return nil
+		}
+	}
+	return io.EOF
+}
 
 type mockTenantSyncResult struct {
 	rowsAffected int64

@@ -14,11 +14,12 @@ import (
 )
 
 type TenantSnapshot struct {
-	ProjectID uuid.UUID                          `json:"project_id"`
-	Routes    []model.Route                      `json:"routes"`
-	Upstreams []model.Upstream                   `json:"upstreams"`
-	Targets   map[string][]model.UpstreamTarget  `json:"targets"`
-	APIKeys   []TenantAPIKeyDTO                  `json:"api_keys"`
+	ProjectID     uuid.UUID                         `json:"project_id"`
+	Routes        []model.Route                     `json:"routes"`
+	Upstreams     []model.Upstream                  `json:"upstreams"`
+	Targets       map[string][]model.UpstreamTarget `json:"targets"`
+	APIKeys       []TenantAPIKeyDTO                 `json:"api_keys"`
+	CustomDomains []model.CustomDomainSync          `json:"custom_domains"`
 }
 
 type TenantAPIKeyDTO struct {

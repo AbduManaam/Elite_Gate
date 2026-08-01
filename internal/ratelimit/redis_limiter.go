@@ -14,6 +14,7 @@ import (
 //  2. Reads the current count (ZCARD).
 //  3. If under the limit, records this request and returns allowed=1.
 //  4. If at/over the limit, does NOT record the request and returns allowed=0.
+//
 // Capping the ZSET to maxEntries prevents unbounded memory growth for a
 // single key under pathological burst traffic, independent of the window
 // trim (e.g. a client hammering the endpoint faster than the window can
@@ -49,7 +50,7 @@ return redis.call("ZCARD", key)
 `)
 
 const (
-	slidingWindow   = 60 * time.Second
+	slidingWindow    = 60 * time.Second
 	maxEntriesPerKey = 10000 // safety valve — see script comment
 )
 

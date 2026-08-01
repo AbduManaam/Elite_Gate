@@ -31,28 +31,31 @@ type TenantAPIKeyDTO struct {
 // POSTGRES_DSN is removed from the gateway — the gateway must get keys
 // from here and self-populate its Redis cache instead.
 type TenantSnapshotDTO struct {
-	ProjectID uuid.UUID                         `json:"project_id"`
-	Routes    []model.Route                     `json:"routes"`
-	Upstreams []model.Upstream                  `json:"upstreams"`
-	Targets   map[string][]model.UpstreamTarget `json:"targets"`
-	APIKeys   []TenantAPIKeyDTO                 `json:"api_keys"`
+	ProjectID     uuid.UUID                         `json:"project_id"`
+	Routes        []model.Route                     `json:"routes"`
+	Upstreams     []model.Upstream                  `json:"upstreams"`
+	Targets       map[string][]model.UpstreamTarget `json:"targets"`
+	APIKeys       []TenantAPIKeyDTO                 `json:"api_keys"`
+	CustomDomains []model.CustomDomainSync          `json:"custom_domains"`
 }
 
 type TenantSyncHandler struct {
-	routeRepo    *storage.RouteRepo
-	upstreamRepo *storage.UpstreamRepo
-	targetRepo   *storage.UpstreamTargetRepo
-	apiKeyRepo   *storage.ApiKeyRepo
-	logger       zerolog.Logger
+	routeRepo        *storage.RouteRepo
+	upstreamRepo     *storage.UpstreamRepo
+	targetRepo       *storage.UpstreamTargetRepo
+	apiKeyRepo       *storage.ApiKeyRepo
+	customDomainRepo *storage.CustomDomainRepo
+	logger           zerolog.Logger
 }
 
 func NewTenantSyncHandler(db *sql.DB, logger zerolog.Logger) *TenantSyncHandler {
 	return &TenantSyncHandler{
-		routeRepo:    storage.NewRouteRepo(db, logger),
-		upstreamRepo: storage.NewUpstreamRepo(db, logger),
-		targetRepo:   storage.NewUpstreamTargetRepo(db, logger),
-		apiKeyRepo:   storage.NewApiKeyRepo(db),
-		logger:       logger,
+		routeRepo:        storage.NewRouteRepo(db, logger),
+		upstreamRepo:     storage.NewUpstreamRepo(db, logger),
+		targetRepo:       storage.NewUpstreamTargetRepo(db, logger),
+		apiKeyRepo:       storage.NewApiKeyRepo(db),
+		customDomainRepo: storage.NewCustomDomainRepo(db, logger),
+		logger:           logger,
 	}
 }
 
@@ -120,11 +123,19 @@ func (h *TenantSyncHandler) GetTenantSnapshot(c *gin.Context) {
 		keyDTOs = append(keyDTOs, TenantAPIKeyDTO{KeyHash: k.KeyHash, Roles: k.Roles, Scopes: k.Scopes})
 	}
 
+	customDomains, err := h.customDomainRepo.ListEligibleSyncDomains(ctx, projectID)
+	if err != nil {
+		log.Error().Err(err).Msg("sync: failed to list custom domains")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch tenant custom domains"})
+		return
+	}
+
 	c.JSON(http.StatusOK, TenantSnapshotDTO{
-		ProjectID: projectID,
-		Routes:    routes,
-		Upstreams: upstreams,
-		Targets:   targetsMap,
-		APIKeys:   keyDTOs,
+		ProjectID:     projectID,
+		Routes:        routes,
+		Upstreams:     upstreams,
+		Targets:       targetsMap,
+		APIKeys:       keyDTOs,
+		CustomDomains: customDomains,
 	})
 }

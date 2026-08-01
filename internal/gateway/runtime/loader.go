@@ -80,11 +80,14 @@ func (l *Loader) reload(ctx context.Context) error {
 	}
 
 	pools := l.buildPoolsFromSnapshot(snap)
+	domainMap := l.buildDomainMap(snap)
 
 	l.mu.Lock()
 	l.snapshot = Snapshot{
 		Routes:        snap.Routes,
 		UpstreamPools: pools,
+		CustomDomains: snap.CustomDomains,
+		DomainMap:     domainMap,
 	}
 	l.mu.Unlock()
 
@@ -95,6 +98,7 @@ func (l *Loader) reload(ctx context.Context) error {
 		Int("routes", len(snap.Routes)).
 		Int("upstream_pools", len(pools)).
 		Int("api_keys_warmed", len(snap.APIKeys)).
+		Int("custom_domains", len(snap.CustomDomains)).
 		Msg("gateway config reloaded from control plane")
 	return nil
 }
@@ -191,6 +195,22 @@ func (l *Loader) buildPoolsFromSnapshot(snap *TenantSnapshot) map[string]Upstrea
 	}
 
 	return pools
+}
+
+func (l *Loader) buildDomainMap(snap *TenantSnapshot) map[string]DomainContext {
+	domainMap := make(map[string]DomainContext, len(snap.CustomDomains))
+	for _, cd := range snap.CustomDomains {
+		norm := NormalizeHost(cd.Hostname)
+		if norm == "" {
+			continue
+		}
+		domainMap[norm] = DomainContext{
+			Hostname:      cd.Hostname,
+			Status:        cd.Status,
+			RoutingStatus: cd.RoutingStatus,
+		}
+	}
+	return domainMap
 }
 
 func (l *Loader) strategyFor(upstreamID, lbStrategy string) loadbalancer.Strategy {

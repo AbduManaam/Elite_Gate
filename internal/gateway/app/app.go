@@ -151,4 +151,3 @@ func StartApp(cfg *config.Config) (*App, error) {
 		RouteLoader: loader,
 	}, nil
 }
-
