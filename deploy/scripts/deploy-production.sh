@@ -23,6 +23,8 @@ readonly ENV_FILE="${DEPLOY_DIR}/production.env"
 
 readonly ADMIN_CONTAINER="elitegate-admin"
 readonly PREVIOUS_ADMIN_CONTAINER="elitegate-admin-previous"
+readonly GATEWAY_CONTAINER="elitegate-gateway"
+readonly PREVIOUS_GATEWAY_CONTAINER="elitegate-gateway-previous"
 
 readonly DATABASE_SECRET="elitegate/production/database/postgres"
 readonly REDIS_SECRET="elitegate/production/redis/cache"
@@ -118,10 +120,27 @@ build_environment_file() {
   local app_environment
   local admin_port
   local gateway_port
+  local project_id
+  local enable_grpc_port
 
   app_environment="$(get_parameter "/elitegate/production/app/environment")"
   admin_port="$(get_parameter "/elitegate/production/admin/port")"
   gateway_port="$(get_parameter "/elitegate/production/gateway/port")"
+
+  project_id="$(get_parameter "/elitegate/production/gateway/project_id" 2>/dev/null || true)"
+  if [[ -z "$project_id" ]]; then
+    project_id="${PROJECT_ID:-}"
+  fi
+
+  [[ -n "$project_id" ]] ||
+    fail "PROJECT_ID is required to start Gateway container, but was not found in SSM (/elitegate/production/gateway/project_id) or environment variable PROJECT_ID."
+
+  local uuid_regex='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+  if [[ ! "$project_id" =~ $uuid_regex ]]; then
+    fail "PROJECT_ID '${project_id}' is not a valid UUID format."
+  fi
+
+  enable_grpc_port="$(get_parameter "/elitegate/production/gateway/enable_grpc" 2>/dev/null || echo "false")"
 
   local db_username
   local db_password
@@ -202,6 +221,11 @@ FRONTEND_URL=https://elitegateway.site
 ADMIN_PORT=${admin_port}
 GATEWAY_PORT=${gateway_port}
 GATEWAY_PUBLIC_HOST=gateway.elitegateway.site
+ADMIN_API_URL=http://${ADMIN_CONTAINER}:${admin_port}
+PROJECT_ID=${project_id}
+ROUTE_RELOAD_INTERVAL=10s
+GRPC_GATEWAY_PORT=:50051
+ENABLE_GRPC_PORT=${enable_grpc_port}
 
 POSTGRES_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
 POSTGRES_GATEWAY_DSN=postgres://${db_username_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}?sslmode=require
@@ -244,15 +268,23 @@ EOF
 }
 
 backup_current_container() {
-  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" >/dev/null 2>&1 || true
+  log "Cleaning stale backup containers..."
+  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" >/dev/null 2>&1 || true
 
   if docker container inspect "$ADMIN_CONTAINER" >/dev/null 2>&1; then
     log "Preserving current Admin container for rollback..."
-
     docker stop "$ADMIN_CONTAINER"
     docker rename "$ADMIN_CONTAINER" "$PREVIOUS_ADMIN_CONTAINER"
   else
     log "No existing Admin container found. This appears to be the first deployment."
+  fi
+
+  if docker container inspect "$GATEWAY_CONTAINER" >/dev/null 2>&1; then
+    log "Preserving current Gateway container for rollback..."
+    docker stop "$GATEWAY_CONTAINER"
+    docker rename "$GATEWAY_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER"
+  else
+    log "No existing Gateway container found."
   fi
 }
 
@@ -282,52 +314,108 @@ start_new_admin() {
     "$ADMIN_IMAGE"
 }
 
+start_new_gateway() {
+  log "Starting the new Gateway container..."
+
+  local grpc_port_args=()
+  if grep -q '^ENABLE_GRPC_PORT=true' "$ENV_FILE"; then
+    grpc_port_args=(-p 50051:50051)
+  fi
+
+  docker run -d \
+    --name "$GATEWAY_CONTAINER" \
+    --restart unless-stopped \
+    --env-file "$ENV_FILE" \
+    --network elitegate_net \
+    -p 8080:8080 \
+    "${grpc_port_args[@]}" \
+    "$GATEWAY_IMAGE"
+}
+
 wait_for_health() {
-  log "Waiting for Admin health check..."
+  log "Waiting for Admin and Gateway health checks..."
 
   local attempts=30
   local delay_seconds=5
+  local admin_healthy=false
+  local gateway_healthy=false
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    if curl --fail --silent --show-error \
-      "http://127.0.0.1:9090/healthz" >/dev/null; then
-      log "Health check passed."
+    local admin_status
+    local gateway_status
+    admin_status="$(docker inspect --format '{{.State.Status}}' "$ADMIN_CONTAINER" 2>/dev/null || echo "stopped")"
+    gateway_status="$(docker inspect --format '{{.State.Status}}' "$GATEWAY_CONTAINER" 2>/dev/null || echo "stopped")"
+
+    if [[ "$admin_status" != "running" || "$gateway_status" != "running" ]]; then
+      log "Health check attempt ${attempt}/${attempts} waiting for containers to run (Admin: ${admin_status}, Gateway: ${gateway_status})."
+      sleep "$delay_seconds"
+      continue
+    fi
+
+    if ! $admin_healthy; then
+      if curl --fail --silent --show-error "http://127.0.0.1:9090/healthz" >/dev/null; then
+        log "Admin health check passed."
+        admin_healthy=true
+      fi
+    fi
+
+    if ! $gateway_healthy; then
+      if curl --fail --silent --show-error "http://127.0.0.1:8080/healthz" >/dev/null; then
+        log "Gateway health check passed."
+        gateway_healthy=true
+      fi
+    fi
+
+    if $admin_healthy && $gateway_healthy; then
+      log "Both Admin and Gateway health checks passed successfully."
       return 0
     fi
 
-    log "Health check attempt ${attempt}/${attempts} failed."
+    log "Health check attempt ${attempt}/${attempts} pending (Admin: ${admin_healthy}, Gateway: ${gateway_healthy})."
     sleep "$delay_seconds"
   done
 
+  log "ERROR: Health check timed out. Admin healthy: ${admin_healthy}, Gateway healthy: ${gateway_healthy}"
   return 1
 }
 
 rollback() {
   log "Deployment failed. Starting rollback..."
 
+  log "--- Admin Container Logs ---"
   docker logs "$ADMIN_CONTAINER" --tail 100 || true
-  docker rm -f "$ADMIN_CONTAINER" >/dev/null 2>&1 || true
+
+  log "--- Gateway Container Logs ---"
+  docker logs "$GATEWAY_CONTAINER" --tail 100 || true
+
+  docker rm -f "$ADMIN_CONTAINER" "$GATEWAY_CONTAINER" >/dev/null 2>&1 || true
 
   if docker container inspect "$PREVIOUS_ADMIN_CONTAINER" >/dev/null 2>&1; then
     docker rename "$PREVIOUS_ADMIN_CONTAINER" "$ADMIN_CONTAINER"
     docker start "$ADMIN_CONTAINER"
-
     log "Previous Admin container restored."
   else
     log "No previous Admin container was available for rollback."
+  fi
+
+  if docker container inspect "$PREVIOUS_GATEWAY_CONTAINER" >/dev/null 2>&1; then
+    docker rename "$PREVIOUS_GATEWAY_CONTAINER" "$GATEWAY_CONTAINER"
+    docker start "$GATEWAY_CONTAINER"
+    log "Previous Gateway container restored."
+  else
+    log "No previous Gateway container was available for rollback."
   fi
 
   exit 1
 }
 
 finish_deployment() {
-  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" >/dev/null 2>&1 || true
-
+  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" >/dev/null 2>&1 || true
   docker image prune -f >/dev/null 2>&1 || true
 
   log "Deployment completed successfully."
   log "Admin image: $ADMIN_IMAGE"
-  log "Gateway image for new tenant gateways: $GATEWAY_IMAGE"
+  log "Gateway image: $GATEWAY_IMAGE"
 }
 
 main() {
@@ -343,6 +431,7 @@ main() {
   build_environment_file
   backup_current_container
   start_new_admin
+  start_new_gateway
 
   if ! wait_for_health; then
     rollback
