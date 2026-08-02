@@ -333,7 +333,7 @@ func (h *CustomDomainHandler) Get(c *gin.Context) {
 	})
 }
 
-// Delete soft-deletes a custom domain for the project in the current tenant context.
+// Delete initiates asynchronous deprovisioning for a custom domain.
 //
 // Route: DELETE /admin/v1/projects/:projectId/custom-domains/:domainId
 func (h *CustomDomainHandler) Delete(c *gin.Context) {
@@ -350,29 +350,37 @@ func (h *CustomDomainHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	err = h.svc.DeleteCustomDomain(
+	deprovisioningDomain, err := h.svc.DeleteCustomDomain(
 		c.Request.Context(),
 		tenantContext.ProjectID,
 		customDomainID,
 	)
 	if err != nil {
-		if errors.Is(err, service.ErrCustomDomainNotFound) {
+		switch {
+		case errors.Is(err, service.ErrAutomationDisabled):
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": err.Error(),
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotFound):
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "custom domain not found",
 			})
 			return
-		}
 
-		helper.RespondInternalError(
-			c,
-			h.logger.With().
-				Str("custom_domain_id", customDomainID.String()).
-				Str("project_id", tenantContext.ProjectID.String()).
-				Logger(),
-			err,
-			"failed to delete custom domain",
-		)
-		return
+		default:
+			helper.RespondInternalError(
+				c,
+				h.logger.With().
+					Str("custom_domain_id", customDomainID.String()).
+					Str("project_id", tenantContext.ProjectID.String()).
+					Logger(),
+				err,
+				"failed to delete custom domain",
+			)
+			return
+		}
 	}
 
 	if h.auditSvc != nil {
@@ -381,19 +389,109 @@ func (h *CustomDomainHandler) Delete(c *gin.Context) {
 			"custom_domain.delete",
 			"custom_domain",
 			customDomainID.String(),
-			"",
-			nil,
+			deprovisioningDomain.Hostname,
+			gin.H{
+				"provisioning_status": deprovisioningDomain.ProvisioningStatus,
+			},
 		)
 	}
 
 	h.logger.Info().
 		Str("custom_domain_id", customDomainID.String()).
 		Str("project_id", tenantContext.ProjectID.String()).
-		Msg("custom domain deleted")
+		Str("provisioning_status", deprovisioningDomain.ProvisioningStatus).
+		Msg("custom domain deprovisioning initiated")
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "custom domain deleted successfully",
-		"id":      customDomainID.String(),
+	if deprovisioningDomain.ProvisioningStatus == domain.ProvisioningStatusDeprovisioned || deprovisioningDomain.DeletedAt != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message":       "custom domain is already deprovisioned",
+			"custom_domain": deprovisioningDomain,
+		})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":            "custom domain deprovisioning started",
+		"status":             "deprovisioning",
+		"provisioningStatus": deprovisioningDomain.ProvisioningStatus,
+		"custom_domain":      deprovisioningDomain,
+	})
+}
+
+// RetryDeprovisioning safely restarts custom domain deprovisioning after a failure.
+//
+// Route: POST /admin/v1/projects/:projectId/custom-domains/:domainId/retry-deprovisioning
+func (h *CustomDomainHandler) RetryDeprovisioning(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	retriedDomain, err := h.svc.RetryDeprovisioning(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAutomationDisabled):
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": err.Error(),
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+
+		case errors.Is(err, service.ErrDomainNotEligibleForRetry):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain is not eligible for deprovisioning retry",
+			})
+			return
+
+		default:
+			helper.RespondInternalError(
+				c,
+				h.logger.With().
+					Str("custom_domain_id", customDomainID.String()).
+					Str("project_id", tenantContext.ProjectID.String()).
+					Logger(),
+				err,
+				"failed to retry deprovisioning",
+			)
+			return
+		}
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.Record(
+			c,
+			"custom_domain.retry_deprovisioning",
+			"custom_domain",
+			retriedDomain.ID.String(),
+			retriedDomain.Hostname,
+			gin.H{
+				"provisioning_status": retriedDomain.ProvisioningStatus,
+			},
+		)
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":            "custom domain deprovisioning retry initiated",
+		"status":             "deprovisioning_restarted",
+		"provisioningStatus": retriedDomain.ProvisioningStatus,
+		"custom_domain":      retriedDomain,
 	})
 }
 
@@ -485,7 +583,7 @@ func (h *CustomDomainHandler) CheckRouting(c *gin.Context) {
 	})
 }
 
-// Activate promotes a verified and routing-ready custom domain to active status.
+// Activate promotes a verified and routing-ready custom domain to active status or enqueues async provisioning.
 //
 // Route: POST /admin/v1/projects/:projectId/custom-domains/:domainId/activate
 func (h *CustomDomainHandler) Activate(c *gin.Context) {
@@ -502,13 +600,19 @@ func (h *CustomDomainHandler) Activate(c *gin.Context) {
 		return
 	}
 
-	activatedDomain, err := h.svc.ActivateCustomDomain(
+	res, err := h.svc.ActivateCustomDomain(
 		c.Request.Context(),
 		tenantContext.ProjectID,
 		customDomainID,
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAutomationDisabled):
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": err.Error(),
+			})
+			return
+
 		case errors.Is(err, service.ErrCustomDomainNotFound):
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "custom domain not found",
@@ -546,23 +650,176 @@ func (h *CustomDomainHandler) Activate(c *gin.Context) {
 			c,
 			"custom_domain.activate",
 			"custom_domain",
-			activatedDomain.ID.String(),
-			activatedDomain.Hostname,
+			res.Domain.ID.String(),
+			res.Domain.Hostname,
 			gin.H{
-				"status":         activatedDomain.Status,
-				"routing_status": activatedDomain.RoutingStatus,
+				"status":              res.Domain.Status,
+				"routing_status":      res.Domain.RoutingStatus,
+				"provisioning_status": res.Domain.ProvisioningStatus,
 			},
 		)
 	}
 
 	h.logger.Info().
-		Str("custom_domain_id", activatedDomain.ID.String()).
-		Str("project_id", activatedDomain.ProjectID.String()).
-		Str("hostname", activatedDomain.Hostname).
-		Msg("custom domain activated")
+		Str("custom_domain_id", res.Domain.ID.String()).
+		Str("project_id", res.Domain.ProjectID.String()).
+		Str("hostname", res.Domain.Hostname).
+		Str("activation_state", string(res.State)).
+		Msg("custom domain activation processed")
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":       "custom domain activated successfully",
-		"custom_domain": activatedDomain,
+	switch res.State {
+	case domain.ActivationAlreadyActive:
+		c.JSON(http.StatusOK, gin.H{
+			"message":       "custom domain is already active",
+			"custom_domain": res.Domain,
+		})
+	case domain.ActivationInProgress:
+		c.JSON(http.StatusAccepted, gin.H{
+			"message":            "custom domain provisioning in progress",
+			"status":             "provisioning_in_progress",
+			"provisioningStatus": res.Domain.ProvisioningStatus,
+			"custom_domain":      res.Domain,
+		})
+	default:
+		c.JSON(http.StatusAccepted, gin.H{
+			"message":            "custom domain provisioning initiated",
+			"status":             "provisioning_started",
+			"provisioningStatus": res.Domain.ProvisioningStatus,
+			"custom_domain":      res.Domain,
+		})
+	}
+}
+
+// GetProvisioningStatus retrieves public provisioning status details for a domain.
+//
+// Route: GET /admin/v1/projects/:projectId/custom-domains/:domainId/provisioning-status
+func (h *CustomDomainHandler) GetProvisioningStatus(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	statusResp, err := h.svc.GetProvisioningStatus(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrCustomDomainNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+		}
+
+		helper.RespondInternalError(
+			c,
+			h.logger.With().
+				Str("custom_domain_id", customDomainID.String()).
+				Str("project_id", tenantContext.ProjectID.String()).
+				Logger(),
+			err,
+			"failed to get provisioning status",
+		)
+		return
+	}
+
+	c.JSON(http.StatusOK, statusResp)
+}
+
+// RetryProvisioning safely restarts custom domain provisioning after a terminal or transient failure.
+//
+// Route: POST /admin/v1/projects/:projectId/custom-domains/:domainId/retry-provisioning
+func (h *CustomDomainHandler) RetryProvisioning(c *gin.Context) {
+	tenantContext, ok := h.getTenantContext(c)
+	if !ok {
+		return
+	}
+
+	customDomainID, err := uuid.Parse(c.Param("domainId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid custom domain ID",
+		})
+		return
+	}
+
+	retriedDomain, err := h.svc.RetryProvisioning(
+		c.Request.Context(),
+		tenantContext.ProjectID,
+		customDomainID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAutomationDisabled):
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": err.Error(),
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "custom domain not found",
+			})
+			return
+
+		case errors.Is(err, service.ErrDomainNotEligibleForRetry):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain is not eligible for retry",
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainNotVerified):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain must be verified before retrying provisioning",
+			})
+			return
+
+		case errors.Is(err, service.ErrCustomDomainRoutingNotReady):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "custom domain routing status must be ready before retrying provisioning",
+			})
+			return
+
+		default:
+			helper.RespondInternalError(
+				c,
+				h.logger.With().
+					Str("custom_domain_id", customDomainID.String()).
+					Str("project_id", tenantContext.ProjectID.String()).
+					Logger(),
+				err,
+				"failed to retry provisioning",
+			)
+			return
+		}
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.Record(
+			c,
+			"custom_domain.retry_provisioning",
+			"custom_domain",
+			retriedDomain.ID.String(),
+			retriedDomain.Hostname,
+			gin.H{
+				"provisioning_status": retriedDomain.ProvisioningStatus,
+			},
+		)
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":            "custom domain provisioning retry initiated",
+		"status":             "provisioning_restarted",
+		"provisioningStatus": retriedDomain.ProvisioningStatus,
+		"custom_domain":      retriedDomain,
 	})
 }

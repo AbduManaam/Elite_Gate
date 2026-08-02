@@ -36,6 +36,7 @@ jobs:
       EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
       ECR_ADMIN_REPOSITORY: ${{ vars.ECR_ADMIN_REPOSITORY }}
       ECR_GATEWAY_REPOSITORY: ${{ vars.ECR_GATEWAY_REPOSITORY }}
+      ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY || 'elitegate-worker' }}
 
     steps:
       - name: Checkout repository
@@ -69,6 +70,7 @@ jobs:
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           echo "ADMIN_IMAGE=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_ADMIN_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
           echo "GATEWAY_IMAGE=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_GATEWAY_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "WORKER_IMAGE=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_WORKER_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
 
       - name: Build Admin image
         run: |
@@ -84,10 +86,18 @@ jobs:
             --tag "$GATEWAY_IMAGE" \
             .
 
+      - name: Build Worker image
+        run: |
+          docker build \
+            --file deploy/docker/worker.Dockerfile \
+            --tag "$WORKER_IMAGE" \
+            .
+
       - name: Push images
         run: |
           docker push "$ADMIN_IMAGE"
           docker push "$GATEWAY_IMAGE"
+          docker push "$WORKER_IMAGE"
 
       - name: Deploy through AWS Systems Manager
         shell: bash
@@ -105,6 +115,7 @@ jobs:
               --arg script "$DEPLOY_SCRIPT_BASE64" \
               --arg admin_image "$ADMIN_IMAGE" \
               --arg gateway_image "$GATEWAY_IMAGE" \
+              --arg worker_image "$WORKER_IMAGE" \
               '{
                 commands: [
                   "sudo mkdir -p /opt/elitegate",
@@ -120,7 +131,9 @@ jobs:
                     "sudo /opt/elitegate/deploy.sh " +
                     ($admin_image | @sh) +
                     " " +
-                    ($gateway_image | @sh)
+                    ($gateway_image | @sh) +
+                    " " +
+                    ($worker_image | @sh)
                   )
                 ]
               }'

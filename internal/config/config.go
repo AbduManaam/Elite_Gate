@@ -101,6 +101,12 @@ type RateLimitConfig struct {
 	Auth              AuthRateLimitConfig `mapstructure:"auth"`
 }
 
+type AWSConfig struct {
+	AutomationEnabled   bool   `mapstructure:"automation_enabled"`
+	Region              string `mapstructure:"region"`
+	ALBHTTPSListenerARN string `mapstructure:"alb_https_listener_arn"`
+}
+
 type Config struct {
 	Server      ServerConfig      `mapstructure:"server"`
 	Log         LogConfig         `mapstructure:"log"`
@@ -110,6 +116,7 @@ type Config struct {
 	GoogleOAuth GoogleOAuthConfig `mapstructure:"google_oauth"`
 	Mail        MailConfig        `mapstructure:"mail"`
 	RateLimit   RateLimitConfig   `mapstructure:"rate_limit"`
+	AWS         AWSConfig         `mapstructure:"aws"`
 	AppEnv      string            `mapstructure:"app_env"`
 }
 
@@ -149,6 +156,8 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("mail.from_name", "Elite Gateway")
 	viper.SetDefault("mail.tls_mode", "starttls")
 	viper.SetDefault("mail.password_reset_url", "http://localhost:5173/reset-password")
+	viper.SetDefault("aws.automation_enabled", false)
+	viper.SetDefault("aws.region", "ap-south-1")
 	viper.SetDefault("app_env", "development")
 
 	// 3. Read the YAML configuration file if it exists
@@ -205,6 +214,9 @@ func LoadConfig() (*Config, error) {
 	viper.BindEnv("mail.from_name", "SMTP_FROM_NAME")
 	viper.BindEnv("mail.tls_mode", "SMTP_TLS_MODE")
 	viper.BindEnv("mail.password_reset_url", "PASSWORD_RESET_URL")
+	viper.BindEnv("aws.automation_enabled", "CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED")
+	viper.BindEnv("aws.region", "AWS_REGION")
+	viper.BindEnv("aws.alb_https_listener_arn", "ALB_HTTPS_LISTENER_ARN")
 
 	viper.AutomaticEnv()
 
@@ -282,8 +294,24 @@ func LoadConfig() (*Config, error) {
 	if err := validateMailConfig(cfg.Mail, cfg.AppEnv == "production"); err != nil {
 		return nil, fmt.Errorf("mail configuration error: %w", err)
 	}
+	if err := validateAWSConfig(cfg.AWS); err != nil {
+		return nil, fmt.Errorf("AWS configuration error: %w", err)
+	}
 
 	return &cfg, nil
+}
+
+func validateAWSConfig(cfg AWSConfig) error {
+	if !cfg.AutomationEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Region) == "" {
+		return errors.New("AWS_REGION is required when CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED is true")
+	}
+	if strings.TrimSpace(cfg.ALBHTTPSListenerARN) == "" {
+		return errors.New("ALB_HTTPS_LISTENER_ARN is required when CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED is true")
+	}
+	return nil
 }
 
 func validatePasswordResetURL(rawURL string, production bool) error {

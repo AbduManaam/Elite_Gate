@@ -103,7 +103,7 @@ func TestLoadConfig_GatewayHostPublic(t *testing.T) {
 	}()
 
 	// 1. Unset GATEWAY_PUBLIC_HOST should default to empty string ""
-	os.Unsetenv("GATEWAY_PUBLIC_HOST")
+	os.Setenv("GATEWAY_PUBLIC_HOST", "")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
@@ -121,5 +121,58 @@ func TestLoadConfig_GatewayHostPublic(t *testing.T) {
 	}
 	if cfgOverride.Server.GatewayHostPublic != customHost {
 		t.Errorf("expected GatewayHostPublic to be %q, got %q", customHost, cfgOverride.Server.GatewayHostPublic)
+	}
+}
+
+func TestLoadConfig_AWSConfig(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED")
+		os.Unsetenv("AWS_REGION")
+		os.Unsetenv("ALB_HTTPS_LISTENER_ARN")
+	}()
+
+	// 1. Automation disabled by default
+	os.Setenv("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED", "false")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config when AWS automation disabled: %v", err)
+	}
+	if cfg.AWS.AutomationEnabled {
+		t.Errorf("expected AutomationEnabled to be false")
+	}
+
+	// 2. Automation enabled without listener ARN should fail validation
+	os.Setenv("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED", "true")
+	os.Setenv("ALB_HTTPS_LISTENER_ARN", "")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("expected LoadConfig error when ALB_HTTPS_LISTENER_ARN is missing")
+	}
+
+	// 3. Automation enabled with valid config
+	os.Setenv("ALB_HTTPS_LISTENER_ARN", "arn:aws:elasticloadbalancing:ap-south-1:123:listener/456")
+	os.Setenv("AWS_REGION", "ap-south-1")
+	cfgValid, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config with valid AWS automation env: %v", err)
+	}
+	if !cfgValid.AWS.AutomationEnabled {
+		t.Errorf("expected AutomationEnabled to be true")
+	}
+	if cfgValid.AWS.Region != "ap-south-1" {
+		t.Errorf("expected Region to be ap-south-1, got %q", cfgValid.AWS.Region)
+	}
+	if cfgValid.AWS.ALBHTTPSListenerARN != "arn:aws:elasticloadbalancing:ap-south-1:123:listener/456" {
+		t.Errorf("expected ALBHTTPSListenerARN to match, got %q", cfgValid.AWS.ALBHTTPSListenerARN)
 	}
 }

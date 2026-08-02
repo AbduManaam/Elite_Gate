@@ -28,7 +28,7 @@ scrape_configs:
         regex: '/?(.*)'
         target_label: instance
         replacement: '$1'
-      - source_labels: [__meta_docker_port_private]
-        regex: "8080"
-        action: keep
+  - job_name: "elitegate-worker"
+    static_configs:
+      - targets: ["elitegate-worker:9091"]
 

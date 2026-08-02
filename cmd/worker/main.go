@@ -7,10 +7,14 @@ import (
 	"syscall"
 	"time"
 
+	"elitegate/internal/aws"
 	"elitegate/internal/config"
 	"elitegate/internal/container"
+	"elitegate/internal/domain"
+	"elitegate/internal/metrics"
 	"elitegate/internal/storage"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 )
 
@@ -55,6 +59,86 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Initialize Prometheus metrics registry & custom domain metrics
+	reg := prometheus.NewRegistry()
+	custMetrics := metrics.NewCustomDomainMetrics(reg)
+
+	// Start Internal Metrics & Health HTTP Server
+	metricsServer := StartWorkerMetricsServer(reg, logger)
+	defer func() {
+		_ = metricsServer.Shutdown(context.Background())
+	}()
+
+	awsAutomationEnabled := os.Getenv("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED") == "true"
+	if awsAutomationEnabled {
+		region := os.Getenv("AWS_REGION")
+		listenerARN := os.Getenv("ALB_HTTPS_LISTENER_ARN")
+
+		awsClient, err := aws.NewClient(ctx, region, listenerARN, true)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to initialize AWS client")
+		}
+
+		customDomainRepo := storage.NewCustomDomainRepo(db, logger)
+		provisioner := NewProvisioner(customDomainRepo, awsClient, awsClient, "worker-main", listenerARN, logger).
+			WithMetrics(custMetrics)
+
+		// Queue depth polling loop (runs only when automation enabled)
+		knownStates := []string{
+			domain.ProvisioningStatusRequestingCertificate,
+			domain.ProvisioningStatusWaitingForValidationRecord,
+			domain.ProvisioningStatusWaitingForDNS,
+			domain.ProvisioningStatusWaitingForCertificate,
+			domain.ProvisioningStatusAttachingCertificate,
+			domain.ProvisioningStatusDeprovisioning,
+		}
+
+		go func() {
+			queueTicker := time.NewTicker(30 * time.Second)
+			defer queueTicker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-queueTicker.C:
+					// Reset all known states to zero before applying query results
+					for _, st := range knownStates {
+						custMetrics.QueueDepth.WithLabelValues(st).Set(0)
+					}
+
+					depths, qErr := customDomainRepo.GetProvisioningQueueDepth(ctx)
+					if qErr != nil {
+						custMetrics.QueueDepthCollectionErrors.Inc()
+						logger.Error().Err(qErr).Msg("failed to collect queue depth metrics")
+					} else {
+						for st, cnt := range depths {
+							custMetrics.QueueDepth.WithLabelValues(st).Set(float64(cnt))
+						}
+						custMetrics.QueueDepthLastSuccessTimestamp.Set(float64(time.Now().Unix()))
+					}
+				}
+			}
+		}()
+
+		// Worker loop
+		go func() {
+			provTicker := time.NewTicker(5 * time.Second)
+			defer provTicker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-provTicker.C:
+					custMetrics.WorkerHeartbeatTimestamp.Set(float64(time.Now().Unix()))
+					_, _ = provisioner.ProcessNextJob(ctx)
+				}
+			}
+		}()
+		logger.Info().Msg("ACM custom domain provisioner loop started")
+	} else {
+		logger.Info().Msg("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED is false; ACM provisioner loop disabled")
+	}
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -72,9 +156,7 @@ func main() {
 }
 
 // reconcileStaleDraining finishes decommissioning any gateway that has
-// been stuck in "draining" longer than staleAfter — the safety net for
-// requests that started a drain but never got to finish it (process
-// restart, client disconnect, network partition).
+// been stuck in "draining" longer than staleAfter.
 func reconcileStaleDraining(
 	ctx context.Context,
 	gatewayRepo *storage.GatewayRepo,
@@ -101,11 +183,11 @@ func reconcileStaleDraining(
 
 		if err := containerMgr.Decommission(ctx, g.ExternalID); err != nil {
 			log.Error().Err(err).Msg("reconciler: failed to stop container runtime")
-			continue // retry next tick
+			continue
 		}
 		if err := gatewayRepo.Decommission(ctx, g.ExternalID); err != nil {
 			log.Error().Err(err).Msg("reconciler: failed to finalize DB row")
-			continue // retry next tick
+			continue
 		}
 
 		log.Info().Msg("reconciler: gateway decommissioned successfully")

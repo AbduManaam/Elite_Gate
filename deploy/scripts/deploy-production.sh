@@ -8,11 +8,13 @@ set -Eeuo pipefail
 # Usage:
 #   sudo /opt/elitegate/deploy.sh \
 #     "<admin-image-uri>" \
-#     "<gateway-image-uri>"
+#     "<gateway-image-uri>" \
+#     "<worker-image-uri>"
 # ---------------------------------------------------------------------------
 
 readonly ADMIN_IMAGE="${1:-}"
 readonly GATEWAY_IMAGE="${2:-}"
+readonly WORKER_IMAGE="${3:-}"
 
 readonly AWS_REGION="ap-south-1"
 readonly AWS_ACCOUNT_ID="455540676403"
@@ -25,6 +27,8 @@ readonly ADMIN_CONTAINER="elitegate-admin"
 readonly PREVIOUS_ADMIN_CONTAINER="elitegate-admin-previous"
 readonly GATEWAY_CONTAINER="elitegate-gateway"
 readonly PREVIOUS_GATEWAY_CONTAINER="elitegate-gateway-previous"
+readonly WORKER_CONTAINER="elitegate-worker"
+readonly PREVIOUS_WORKER_CONTAINER="elitegate-worker-previous"
 
 readonly DATABASE_SECRET="elitegate/production/database/postgres"
 readonly REDIS_SECRET="elitegate/production/redis/cache"
@@ -73,11 +77,17 @@ validate_inputs() {
   [[ -n "$GATEWAY_IMAGE" ]] ||
     fail "Gateway image URI was not provided."
 
+  [[ -n "$WORKER_IMAGE" ]] ||
+    fail "Worker image URI was not provided."
+
   [[ "$ADMIN_IMAGE" == "${ECR_REGISTRY}/elitegate-admin:"* ]] ||
     fail "Unexpected Admin image URI: $ADMIN_IMAGE"
 
   [[ "$GATEWAY_IMAGE" == "${ECR_REGISTRY}/elitegate-gateway:"* ]] ||
     fail "Unexpected Gateway image URI: $GATEWAY_IMAGE"
+
+  [[ "$WORKER_IMAGE" == "${ECR_REGISTRY}/elitegate-worker:"* ]] ||
+    fail "Unexpected Worker image URI: $WORKER_IMAGE"
 }
 
 prepare_directory() {
@@ -100,6 +110,9 @@ pull_images() {
 
   log "Pulling Gateway image: $GATEWAY_IMAGE"
   docker pull "$GATEWAY_IMAGE"
+
+  log "Pulling Worker image: $WORKER_IMAGE"
+  docker pull "$WORKER_IMAGE"
 }
 
 build_environment_file() {
@@ -122,6 +135,10 @@ build_environment_file() {
   local gateway_port
   local project_id
   local enable_grpc_port
+  local automation_enabled
+  local aws_region_param
+  local alb_listener_arn
+  local worker_metrics_addr
 
   app_environment="$(get_parameter "/elitegate/production/app/environment")"
   admin_port="$(get_parameter "/elitegate/production/admin/port")"
@@ -141,6 +158,10 @@ build_environment_file() {
   fi
 
   enable_grpc_port="$(get_parameter "/elitegate/production/gateway/enable_grpc" 2>/dev/null || echo "false")"
+  automation_enabled="$(get_parameter "/elitegate/production/acm/automation_enabled" 2>/dev/null || echo "true")"
+  aws_region_param="$(get_parameter "/elitegate/production/aws/region" 2>/dev/null || echo "${AWS_REGION}")"
+  alb_listener_arn="$(get_parameter "/elitegate/production/alb/https_listener_arn" 2>/dev/null || true)"
+  worker_metrics_addr="$(get_parameter "/elitegate/production/worker/metrics_addr" 2>/dev/null || echo ":9091")"
 
   local db_username
   local db_password
@@ -174,8 +195,8 @@ build_environment_file() {
   redis_endpoint="$(jq -r '.primary_endpoint' <<<"$redis_json")"
   redis_port="$(jq -r '.port' <<<"$redis_json")"
   redis_token_encoded="$(
-  jq -nr --arg value "$redis_token" '$value | @uri'
-)"
+    jq -nr --arg value "$redis_token" '$value | @uri'
+  )"
 
   local jwt_secret
   jwt_secret="$(jq -r '.jwt_secret' <<<"$jwt_json")"
@@ -249,6 +270,11 @@ SMTP_FROM_NAME=${smtp_from_name}
 SMTP_TLS_MODE=${smtp_tls_mode}
 PASSWORD_RESET_URL=${password_reset_url}
 GATEWAY_IMAGE_NAME=${GATEWAY_IMAGE}
+
+CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED=${automation_enabled}
+AWS_REGION=${aws_region_param}
+ALB_HTTPS_LISTENER_ARN=${alb_listener_arn}
+WORKER_METRICS_ADDR=${worker_metrics_addr}
 EOF
 
   chown root:root "$temporary_env"
@@ -269,7 +295,7 @@ EOF
 
 backup_current_container() {
   log "Cleaning stale backup containers..."
-  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" "$PREVIOUS_WORKER_CONTAINER" >/dev/null 2>&1 || true
 
   if docker container inspect "$ADMIN_CONTAINER" >/dev/null 2>&1; then
     log "Preserving current Admin container for rollback..."
@@ -285,6 +311,14 @@ backup_current_container() {
     docker rename "$GATEWAY_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER"
   else
     log "No existing Gateway container found."
+  fi
+
+  if docker container inspect "$WORKER_CONTAINER" >/dev/null 2>&1; then
+    log "Preserving current Worker container for rollback..."
+    docker stop "$WORKER_CONTAINER"
+    docker rename "$WORKER_CONTAINER" "$PREVIOUS_WORKER_CONTAINER"
+  else
+    log "No existing Worker container found."
   fi
 }
 
@@ -332,22 +366,39 @@ start_new_gateway() {
     "$GATEWAY_IMAGE"
 }
 
+start_new_worker() {
+  log "Starting the new Worker container..."
+
+  docker run -d \
+    --name "$WORKER_CONTAINER" \
+    --restart unless-stopped \
+    --env-file "$ENV_FILE" \
+    --network elitegate_net \
+    --network-alias elitegate-worker \
+    -p 127.0.0.1:9091:9091 \
+    "$WORKER_IMAGE"
+}
+
 wait_for_health() {
-  log "Waiting for Admin and Gateway health checks..."
+  log "Waiting for Admin, Gateway, and Worker health checks..."
 
   local attempts=30
   local delay_seconds=5
   local admin_healthy=false
   local gateway_healthy=false
+  local worker_healthy=false
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     local admin_status
     local gateway_status
+    local worker_status
+
     admin_status="$(docker inspect --format '{{.State.Status}}' "$ADMIN_CONTAINER" 2>/dev/null || echo "stopped")"
     gateway_status="$(docker inspect --format '{{.State.Status}}' "$GATEWAY_CONTAINER" 2>/dev/null || echo "stopped")"
+    worker_status="$(docker inspect --format '{{.State.Status}}' "$WORKER_CONTAINER" 2>/dev/null || echo "stopped")"
 
-    if [[ "$admin_status" != "running" || "$gateway_status" != "running" ]]; then
-      log "Health check attempt ${attempt}/${attempts} waiting for containers to run (Admin: ${admin_status}, Gateway: ${gateway_status})."
+    if [[ "$admin_status" != "running" || "$gateway_status" != "running" || "$worker_status" != "running" ]]; then
+      log "Health check attempt ${attempt}/${attempts} waiting for containers to run (Admin: ${admin_status}, Gateway: ${gateway_status}, Worker: ${worker_status})."
       sleep "$delay_seconds"
       continue
     fi
@@ -366,16 +417,23 @@ wait_for_health() {
       fi
     fi
 
-    if $admin_healthy && $gateway_healthy; then
-      log "Both Admin and Gateway health checks passed successfully."
+    if ! $worker_healthy; then
+      if curl --fail --silent --show-error "http://127.0.0.1:9091/healthz" >/dev/null; then
+        log "Worker health check passed."
+        worker_healthy=true
+      fi
+    fi
+
+    if $admin_healthy && $gateway_healthy && $worker_healthy; then
+      log "All Admin, Gateway, and Worker health checks passed successfully."
       return 0
     fi
 
-    log "Health check attempt ${attempt}/${attempts} pending (Admin: ${admin_healthy}, Gateway: ${gateway_healthy})."
+    log "Health check attempt ${attempt}/${attempts} pending (Admin: ${admin_healthy}, Gateway: ${gateway_healthy}, Worker: ${worker_healthy})."
     sleep "$delay_seconds"
   done
 
-  log "ERROR: Health check timed out. Admin healthy: ${admin_healthy}, Gateway healthy: ${gateway_healthy}"
+  log "ERROR: Health check timed out. Admin: ${admin_healthy}, Gateway: ${gateway_healthy}, Worker: ${worker_healthy}"
   return 1
 }
 
@@ -388,7 +446,10 @@ rollback() {
   log "--- Gateway Container Logs ---"
   docker logs "$GATEWAY_CONTAINER" --tail 100 || true
 
-  docker rm -f "$ADMIN_CONTAINER" "$GATEWAY_CONTAINER" >/dev/null 2>&1 || true
+  log "--- Worker Container Logs ---"
+  docker logs "$WORKER_CONTAINER" --tail 100 || true
+
+  docker rm -f "$ADMIN_CONTAINER" "$GATEWAY_CONTAINER" "$WORKER_CONTAINER" >/dev/null 2>&1 || true
 
   if docker container inspect "$PREVIOUS_ADMIN_CONTAINER" >/dev/null 2>&1; then
     docker rename "$PREVIOUS_ADMIN_CONTAINER" "$ADMIN_CONTAINER"
@@ -406,16 +467,25 @@ rollback() {
     log "No previous Gateway container was available for rollback."
   fi
 
+  if docker container inspect "$PREVIOUS_WORKER_CONTAINER" >/dev/null 2>&1; then
+    docker rename "$PREVIOUS_WORKER_CONTAINER" "$WORKER_CONTAINER"
+    docker start "$WORKER_CONTAINER"
+    log "Previous Worker container restored."
+  else
+    log "No previous Worker container was available for rollback."
+  fi
+
   exit 1
 }
 
 finish_deployment() {
-  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$PREVIOUS_ADMIN_CONTAINER" "$PREVIOUS_GATEWAY_CONTAINER" "$PREVIOUS_WORKER_CONTAINER" >/dev/null 2>&1 || true
   docker image prune -f >/dev/null 2>&1 || true
 
   log "Deployment completed successfully."
   log "Admin image: $ADMIN_IMAGE"
   log "Gateway image: $GATEWAY_IMAGE"
+  log "Worker image: $WORKER_IMAGE"
 }
 
 main() {
@@ -432,6 +502,7 @@ main() {
   backup_current_container
   start_new_admin
   start_new_gateway
+  start_new_worker
 
   if ! wait_for_health; then
     rollback

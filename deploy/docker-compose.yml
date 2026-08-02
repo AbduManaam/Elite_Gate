@@ -81,6 +81,27 @@ services:
     networks:
       - elitegate_net
 
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/docker/worker.Dockerfile
+    image: elitegate-worker:latest
+    container_name: elitegate_worker
+    ports:
+      - "127.0.0.1:9092:9091"
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      elitegate_net:
+        aliases:
+          - elitegate-worker
+
   prometheus:
     image: prom/prometheus:latest
     container_name: elitegate_prometheus

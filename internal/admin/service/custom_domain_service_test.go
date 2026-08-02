@@ -144,6 +144,87 @@ func (f *fakeCustomDomainRepo) MarkActive(ctx context.Context, id, projectID uui
 	return d, nil
 }
 
+func (f *fakeCustomDomainRepo) EnqueueProvisioning(ctx context.Context, id, projectID uuid.UUID) (*domain.CustomDomain, error) {
+	d, err := f.GetByIDForProject(ctx, id, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if d.Status != domain.CustomDomainStatusVerified || d.RoutingStatus != domain.CustomDomainRoutingStatusReady {
+		return nil, storage.ErrDomainNotEligible
+	}
+	d.ProvisioningStatus = domain.ProvisioningStatusRequestingCertificate
+	now := time.Now()
+	d.ProvisioningStartedAt = &now
+	d.ProvisioningAttempts = 0
+	d.NextRetryAt = &now
+	d.ProvisioningError = nil
+	return d, nil
+}
+
+func (f *fakeCustomDomainRepo) ResetProvisioningForRetry(ctx context.Context, id, projectID uuid.UUID, targetStatus string) (*domain.CustomDomain, error) {
+	d, err := f.GetByIDForProject(ctx, id, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if d.ProvisioningStatus != domain.ProvisioningStatusFailed {
+		return nil, storage.ErrDomainNotEligibleForRetry
+	}
+	d.ProvisioningStatus = targetStatus
+	now := time.Now()
+	d.ProvisioningStartedAt = &now
+	d.ProvisioningAttempts = 0
+	d.NextRetryAt = &now
+	d.ProvisioningError = nil
+	d.UpdatedAt = now
+	return d, nil
+}
+
+func (f *fakeCustomDomainRepo) EnqueueDeprovisioning(ctx context.Context, id, projectID uuid.UUID) (*domain.CustomDomain, error) {
+	d, ok := f.domains[id.String()]
+	if !ok || d.ProjectID != projectID {
+		return nil, storage.ErrCustomDomainNotFound
+	}
+	if d.ProvisioningStatus == domain.ProvisioningStatusDeprovisioning ||
+		d.ProvisioningStatus == domain.ProvisioningStatusDeprovisioned ||
+		d.DeletedAt != nil {
+		return d, nil
+	}
+	d.ProvisioningStatus = domain.ProvisioningStatusDeprovisioning
+	now := time.Now()
+	d.NextRetryAt = &now
+	d.ProvisioningError = nil
+	d.UpdatedAt = now
+	return d, nil
+}
+
+func (f *fakeCustomDomainRepo) MarkDeprovisionFailed(ctx context.Context, id, leaseToken uuid.UUID, errStr string) error {
+	d, ok := f.domains[id.String()]
+	if !ok {
+		return storage.ErrCustomDomainNotFound
+	}
+	d.ProvisioningStatus = domain.ProvisioningStatusDeprovisionFailed
+	d.ProvisioningError = &errStr
+	d.UpdatedAt = time.Now()
+	return nil
+}
+
+func (f *fakeCustomDomainRepo) ResetDeprovisioningForRetry(ctx context.Context, id, projectID uuid.UUID) (*domain.CustomDomain, error) {
+	d, err := f.GetByIDForProject(ctx, id, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if d.ProvisioningStatus != domain.ProvisioningStatusDeprovisionFailed {
+		return nil, storage.ErrDomainNotEligibleForRetry
+	}
+	d.ProvisioningStatus = domain.ProvisioningStatusDeprovisioning
+	now := time.Now()
+	d.ProvisioningAttempts = 0
+	d.NextRetryAt = &now
+	d.ProvisioningError = nil
+	d.UpdatedAt = now
+	return d, nil
+}
+
 func TestVerifyCustomDomain_Success(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
@@ -567,14 +648,15 @@ func TestListCustomDomains_ExcludesDeleted(t *testing.T) {
 		ProjectID: projectID,
 		Hostname:  "deleted.example.com",
 	}
+	now := time.Now()
+	d2.DeletedAt = &now
 	require.NoError(t, repo.Create(context.Background(), d1))
 	require.NoError(t, repo.Create(context.Background(), d2))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	require.NoError(t, svc.DeleteCustomDomain(context.Background(), projectID, d2.ID))
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 
-	domains, err := svc.ListCustomDomains(context.Background(), projectID)
-	require.NoError(t, err)
+	domains, getErr := svc.ListCustomDomains(context.Background(), projectID)
+	require.NoError(t, getErr)
 	assert.Len(t, domains, 1)
 	assert.Equal(t, d1.ID, domains[0].ID)
 }
@@ -588,26 +670,23 @@ func TestGetCustomDomain_Success(t *testing.T) {
 		ID:        uuid.New(),
 		ProjectID: projectID,
 		Hostname:  "get.example.com",
-		Status:    domain.CustomDomainStatusVerified,
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	result, err := svc.GetCustomDomain(context.Background(), projectID, d.ID)
-
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	stored, err := svc.GetCustomDomain(context.Background(), projectID, d.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, d.ID, result.ID)
-	assert.Equal(t, "get.example.com", result.Hostname)
+	assert.Equal(t, d.ID, stored.ID)
+	assert.Equal(t, "get.example.com", stored.Hostname)
 }
 
 func TestGetCustomDomain_NotFound(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	_, err := svc.GetCustomDomain(context.Background(), uuid.New(), uuid.New())
-
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	_, err := svc.GetCustomDomain(context.Background(), projectID, uuid.New())
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
 }
 
@@ -642,15 +721,13 @@ func TestDeleteCustomDomain_Success(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	err := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	res, err := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
 	require.NoError(t, err)
-
-	_, getErr := svc.GetCustomDomain(context.Background(), projectID, d.ID)
-	assert.ErrorIs(t, getErr, ErrCustomDomainNotFound)
+	assert.Equal(t, domain.ProvisioningStatusDeprovisioning, res.ProvisioningStatus)
 }
 
-func TestDeleteCustomDomain_DoubleDelete(t *testing.T) {
+func TestDeleteCustomDomain_DoubleDelete_Idempotent(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
 	projectID := uuid.New()
@@ -662,12 +739,15 @@ func TestDeleteCustomDomain_DoubleDelete(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	require.NoError(t, svc.DeleteCustomDomain(context.Background(), projectID, d.ID))
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	res1, err1 := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
+	require.NoError(t, err1)
+	assert.Equal(t, domain.ProvisioningStatusDeprovisioning, res1.ProvisioningStatus)
 
-	// Second delete attempt must return ErrCustomDomainNotFound (404)
-	err := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
-	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
+	// Second delete attempt is idempotent and returns 202 with existing state
+	res2, err2 := svc.DeleteCustomDomain(context.Background(), projectID, d.ID)
+	require.NoError(t, err2)
+	assert.Equal(t, domain.ProvisioningStatusDeprovisioning, res2.ProvisioningStatus)
 }
 
 func TestDeleteCustomDomain_WrongProject(t *testing.T) {
@@ -683,8 +763,8 @@ func TestDeleteCustomDomain_WrongProject(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
-	err := svc.DeleteCustomDomain(context.Background(), projectB, d.ID)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	_, err := svc.DeleteCustomDomain(context.Background(), projectB, d.ID)
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
 
 	// Domain remains intact for project A
@@ -918,13 +998,13 @@ func TestActivateCustomDomain_VerifiedAndReady_Success(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	result, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, domain.CustomDomainStatusActive, result.Status)
-	assert.NotNil(t, result.ActivatedAt)
+	assert.Equal(t, domain.ActivationQueued, result.State)
+	assert.Equal(t, domain.ProvisioningStatusRequestingCertificate, result.Domain.ProvisioningStatus)
 }
 
 func TestActivateCustomDomain_AlreadyActiveAndReady_Idempotent(t *testing.T) {
@@ -934,21 +1014,22 @@ func TestActivateCustomDomain_AlreadyActiveAndReady_Idempotent(t *testing.T) {
 	now := time.Now()
 
 	d := &domain.CustomDomain{
-		ID:            uuid.New(),
-		ProjectID:     projectID,
-		Hostname:      "idempotent.example.com",
-		Status:        domain.CustomDomainStatusActive,
-		RoutingStatus: domain.CustomDomainRoutingStatusReady,
-		ActivatedAt:   &now,
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "idempotent.example.com",
+		Status:             domain.CustomDomainStatusActive,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusCompleted,
+		ActivatedAt:        &now,
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	result, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, domain.CustomDomainStatusActive, result.Status)
+	assert.Equal(t, domain.ActivationAlreadyActive, result.State)
 }
 
 func TestActivateCustomDomain_RoutingNotReady(t *testing.T) {
@@ -965,7 +1046,7 @@ func TestActivateCustomDomain_RoutingNotReady(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrCustomDomainRoutingNotReady)
@@ -985,7 +1066,7 @@ func TestActivateCustomDomain_PendingVerification(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotVerified)
@@ -1006,7 +1087,7 @@ func TestActivateCustomDomain_DeletedDomain(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), d))
 	require.NoError(t, repo.SoftDelete(context.Background(), d.ID, projectID))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
@@ -1027,8 +1108,129 @@ func TestActivateCustomDomain_WrongProject(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), d))
 
-	svc := NewCustomDomainService(repo, nil, "gateway.elitegateway.site", logger)
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
 	_, err := svc.ActivateCustomDomain(context.Background(), projectB, d.ID)
 
 	assert.ErrorIs(t, err, ErrCustomDomainNotFound)
+}
+
+func TestActivateCustomDomain_AutomationDisabled_ReturnsErrAutomationDisabled(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		Hostname:      "app.example.com",
+		Status:        domain.CustomDomainStatusVerified,
+		RoutingStatus: domain.CustomDomainRoutingStatusReady,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", false, logger)
+	_, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+	assert.ErrorIs(t, err, ErrAutomationDisabled)
+}
+
+func TestActivateCustomDomain_AutomationEnabled_Enqueues(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "app.example.com",
+		Status:             domain.CustomDomainStatusVerified,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusNotStarted,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	res, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ActivationQueued, res.State)
+	assert.Equal(t, domain.ProvisioningStatusRequestingCertificate, res.Domain.ProvisioningStatus)
+}
+
+func TestActivateCustomDomain_AlreadyActive_ReturnsAlreadyActive(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "active.example.com",
+		Status:             domain.CustomDomainStatusActive,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusCompleted,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	res, err := svc.ActivateCustomDomain(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ActivationAlreadyActive, res.State)
+}
+
+func TestGetProvisioningStatus_SanitizesLastErrorAndExcludesSecretValue(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	valName := "_acm-val.example.com"
+	valValue := "secret-val-token"
+	rawErr := "AccessDeniedException: user is not authorized"
+
+	d := &domain.CustomDomain{
+		ID:                         uuid.New(),
+		ProjectID:                  projectID,
+		Hostname:                   "app.example.com",
+		Status:                     domain.CustomDomainStatusVerified,
+		RoutingStatus:              domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus:         domain.ProvisioningStatusWaitingForDNS,
+		CertificateValidationName:  &valName,
+		CertificateValidationValue: &valValue,
+		ProvisioningError:          &rawErr,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	status, err := svc.GetProvisioningStatus(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "app.example.com", status.Hostname)
+	assert.Equal(t, &valName, status.CertificateValidationName)
+	assert.NotNil(t, status.LastError)
+	assert.Equal(t, "An error occurred during certificate provisioning. Please retry or contact support.", *status.LastError)
+}
+
+func TestRetryProvisioning_SmartResume(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test"
+	valName := "_cname.example.com"
+	issuedStatus := domain.CertificateStatusIssued
+	rawErr := "validation timed out"
+
+	d := &domain.CustomDomain{
+		ID:                        uuid.New(),
+		ProjectID:                 projectID,
+		Hostname:                  "retry.example.com",
+		Status:                    domain.CustomDomainStatusVerified,
+		RoutingStatus:             domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus:        domain.ProvisioningStatusFailed,
+		CertificateARN:            &certARN,
+		CertificateValidationName: &valName,
+		CertificateStatus:         &issuedStatus,
+		ProvisioningError:         &rawErr,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	retried, err := svc.RetryProvisioning(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ProvisioningStatusAttachingCertificate, retried.ProvisioningStatus)
 }

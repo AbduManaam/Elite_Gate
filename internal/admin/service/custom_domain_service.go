@@ -54,6 +54,12 @@ var (
 	ErrCustomDomainRoutingNotReady = errors.New(
 		"custom domain routing status must be ready before activation",
 	)
+	ErrAutomationDisabled = errors.New(
+		"automatic certificate provisioning is currently disabled",
+	)
+	ErrDomainNotEligibleForRetry = errors.New(
+		"custom domain not eligible for retry",
+	)
 )
 
 // CustomDomainRepository defines the storage operations required by CustomDomainService.
@@ -112,6 +118,38 @@ type CustomDomainRepository interface {
 		target string,
 		routingError *string,
 	) (*domain.CustomDomain, error)
+
+	EnqueueProvisioning(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+	) (*domain.CustomDomain, error)
+
+	ResetProvisioningForRetry(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+		targetStatus string,
+	) (*domain.CustomDomain, error)
+
+	EnqueueDeprovisioning(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+	) (*domain.CustomDomain, error)
+
+	MarkDeprovisionFailed(
+		ctx context.Context,
+		id uuid.UUID,
+		leaseToken uuid.UUID,
+		errStr string,
+	) error
+
+	ResetDeprovisioningForRetry(
+		ctx context.Context,
+		id uuid.UUID,
+		projectID uuid.UUID,
+	) (*domain.CustomDomain, error)
 }
 
 // DNSResolver represents a DNS resolver capable of querying TXT and CNAME records.
@@ -122,11 +160,18 @@ type DNSResolver interface {
 	LookupCNAME(ctx context.Context, host string) (string, error)
 }
 
+// ActivateCustomDomainResult represents the result of an activation attempt.
+type ActivateCustomDomainResult struct {
+	Domain *domain.CustomDomain
+	State  domain.ActivationState
+}
+
 // CustomDomainService handles custom-domain business logic.
 type CustomDomainService struct {
 	repo              CustomDomainRepository
 	resolver          DNSResolver
 	gatewayPublicHost string
+	automationEnabled bool
 	logger            zerolog.Logger
 }
 
@@ -145,6 +190,30 @@ func NewCustomDomainService(
 		repo:              repo,
 		resolver:          resolver,
 		gatewayPublicHost: gatewayPublicHost,
+		automationEnabled: false,
+		logger: logger.With().
+			Str("service", "custom_domain").
+			Logger(),
+	}
+}
+
+// NewCustomDomainServiceWithAutomation creates a CustomDomainService with explicit automation setting.
+func NewCustomDomainServiceWithAutomation(
+	repo CustomDomainRepository,
+	resolver DNSResolver,
+	gatewayPublicHost string,
+	automationEnabled bool,
+	logger zerolog.Logger,
+) *CustomDomainService {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+
+	return &CustomDomainService{
+		repo:              repo,
+		resolver:          resolver,
+		gatewayPublicHost: gatewayPublicHost,
+		automationEnabled: automationEnabled,
 		logger: logger.With().
 			Str("service", "custom_domain").
 			Logger(),
@@ -167,6 +236,7 @@ func NewCustomDomainServiceWithResolver(
 		repo:              repo,
 		resolver:          resolver,
 		gatewayPublicHost: gatewayPublicHost,
+		automationEnabled: false,
 		logger: logger.With().
 			Str("service", "custom_domain").
 			Logger(),
@@ -490,31 +560,69 @@ func (s *CustomDomainService) GetCustomDomain(
 	return customDomain, nil
 }
 
-// DeleteCustomDomain soft deletes a custom domain for a project.
+// DeleteCustomDomain initiates asynchronous custom domain deprovisioning and cleanup.
+// If the domain is already deprovisioned or soft-deleted, it idempotently returns success.
 func (s *CustomDomainService) DeleteCustomDomain(
 	ctx context.Context,
 	projectID uuid.UUID,
 	customDomainID uuid.UUID,
-) error {
-	err := s.repo.SoftDelete(
-		ctx,
-		customDomainID,
-		projectID,
-	)
+) (*domain.CustomDomain, error) {
+	if !s.automationEnabled {
+		return nil, ErrAutomationDisabled
+	}
+
+	cd, err := s.repo.EnqueueDeprovisioning(ctx, customDomainID, projectID)
 	if err != nil {
 		if errors.Is(err, storage.ErrCustomDomainNotFound) {
-			return ErrCustomDomainNotFound
+			return nil, ErrCustomDomainNotFound
 		}
-
-		return fmt.Errorf("delete custom domain: %w", err)
+		return nil, fmt.Errorf("enqueue deprovisioning: %w", err)
 	}
 
 	s.logger.Info().
-		Str("custom_domain_id", customDomainID.String()).
-		Str("project_id", projectID.String()).
-		Msg("custom domain soft deleted")
+		Str("custom_domain_id", cd.ID.String()).
+		Str("project_id", cd.ProjectID.String()).
+		Str("hostname", cd.Hostname).
+		Str("provisioning_status", cd.ProvisioningStatus).
+		Msg("custom domain deprovisioning enqueued")
 
-	return nil
+	return cd, nil
+}
+
+// RetryDeprovisioning safely restarts custom domain deprovisioning after a failure.
+func (s *CustomDomainService) RetryDeprovisioning(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	if !s.automationEnabled {
+		return nil, ErrAutomationDisabled
+	}
+
+	cd, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+		return nil, fmt.Errorf("get custom domain for retry deprovisioning: %w", err)
+	}
+
+	if cd.ProvisioningStatus != domain.ProvisioningStatusDeprovisionFailed {
+		return nil, ErrDomainNotEligibleForRetry
+	}
+
+	retried, err := s.repo.ResetDeprovisioningForRetry(ctx, customDomainID, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("reset deprovisioning for retry: %w", err)
+	}
+
+	s.logger.Info().
+		Str("custom_domain_id", retried.ID.String()).
+		Str("project_id", retried.ProjectID.String()).
+		Str("hostname", retried.Hostname).
+		Msg("custom domain deprovisioning retry enqueued")
+
+	return retried, nil
 }
 
 // CheckCustomDomainRouting verifies that the custom domain's CNAME record points to the gateway target.
@@ -588,13 +696,16 @@ func normalizeCNAME(cname string) string {
 	return cname
 }
 
-// ActivateCustomDomain promotes a verified and routing-ready domain to active status.
-// If the domain is already active and routing is ready, it idempotently returns the existing domain.
+// ActivateCustomDomain initiates or returns the state of asynchronous custom domain provisioning.
 func (s *CustomDomainService) ActivateCustomDomain(
 	ctx context.Context,
 	projectID uuid.UUID,
 	customDomainID uuid.UUID,
-) (*domain.CustomDomain, error) {
+) (*ActivateCustomDomainResult, error) {
+	if !s.automationEnabled {
+		return nil, ErrAutomationDisabled
+	}
+
 	customDomain, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
 	if err != nil {
 		if errors.Is(err, storage.ErrCustomDomainNotFound) {
@@ -603,11 +714,23 @@ func (s *CustomDomainService) ActivateCustomDomain(
 		return nil, fmt.Errorf("load custom domain for activation: %w", err)
 	}
 
-	if customDomain.Status == domain.CustomDomainStatusActive {
-		if customDomain.RoutingStatus == domain.CustomDomainRoutingStatusReady {
-			return customDomain, nil
-		}
-		return nil, ErrCustomDomainRoutingNotReady
+	if customDomain.Status == domain.CustomDomainStatusActive || customDomain.ProvisioningStatus == domain.ProvisioningStatusCompleted {
+		return &ActivateCustomDomainResult{
+			Domain: customDomain,
+			State:  domain.ActivationAlreadyActive,
+		}, nil
+	}
+
+	switch customDomain.ProvisioningStatus {
+	case domain.ProvisioningStatusRequestingCertificate,
+		domain.ProvisioningStatusWaitingForValidationRecord,
+		domain.ProvisioningStatusWaitingForDNS,
+		domain.ProvisioningStatusWaitingForCertificate,
+		domain.ProvisioningStatusAttachingCertificate:
+		return &ActivateCustomDomainResult{
+			Domain: customDomain,
+			State:  domain.ActivationInProgress,
+		}, nil
 	}
 
 	if customDomain.Status != domain.CustomDomainStatusVerified {
@@ -618,19 +741,143 @@ func (s *CustomDomainService) ActivateCustomDomain(
 		return nil, ErrCustomDomainRoutingNotReady
 	}
 
-	activatedDomain, err := s.repo.MarkActive(ctx, customDomainID, projectID)
+	if customDomain.ProvisioningStatus == domain.ProvisioningStatusFailed {
+		retried, err := s.performRetry(ctx, customDomain)
+		if err != nil {
+			return nil, err
+		}
+		return &ActivateCustomDomainResult{
+			Domain: retried,
+			State:  domain.ActivationQueued,
+		}, nil
+	}
+
+	enqueued, err := s.repo.EnqueueProvisioning(ctx, customDomainID, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue provisioning: %w", err)
+	}
+
+	s.logger.Info().
+		Str("custom_domain_id", enqueued.ID.String()).
+		Str("project_id", enqueued.ProjectID.String()).
+		Str("hostname", enqueued.Hostname).
+		Msg("custom domain provisioning enqueued")
+
+	return &ActivateCustomDomainResult{
+		Domain: enqueued,
+		State:  domain.ActivationQueued,
+	}, nil
+}
+
+// GetProvisioningStatus retrieves safe, customer-facing provisioning status details for a domain.
+func (s *CustomDomainService) GetProvisioningStatus(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.ProvisioningStatusResponse, error) {
+	cd, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
 	if err != nil {
 		if errors.Is(err, storage.ErrCustomDomainNotFound) {
 			return nil, ErrCustomDomainNotFound
 		}
-		return nil, fmt.Errorf("mark custom domain active: %w", err)
+		return nil, fmt.Errorf("get custom domain provisioning status: %w", err)
 	}
 
-	s.logger.Info().
-		Str("custom_domain_id", activatedDomain.ID.String()).
-		Str("project_id", activatedDomain.ProjectID.String()).
-		Str("hostname", activatedDomain.Hostname).
-		Msg("custom domain activated")
+	var sanitizedErr *string
+	if cd.ProvisioningError != nil && *cd.ProvisioningError != "" {
+		msg := sanitizeProvisioningError(*cd.ProvisioningError)
+		sanitizedErr = &msg
+	}
 
-	return activatedDomain, nil
+	var valName *string
+	if cd.ProvisioningStatus == domain.ProvisioningStatusWaitingForValidationRecord ||
+		cd.ProvisioningStatus == domain.ProvisioningStatusWaitingForDNS {
+		valName = cd.CertificateValidationName
+	}
+
+	return &domain.ProvisioningStatusResponse{
+		ID:                        cd.ID,
+		Hostname:                  cd.Hostname,
+		Status:                    cd.Status,
+		RoutingStatus:             cd.RoutingStatus,
+		ProvisioningStatus:        cd.ProvisioningStatus,
+		CertificateStatus:         cd.CertificateStatus,
+		CertificateValidationName: valName,
+		LastError:                 sanitizedErr,
+		Attempts:                  cd.ProvisioningAttempts,
+		NextRetryAt:               cd.NextRetryAt,
+		CertificateIssuedAt:       cd.CertificateIssuedAt,
+		CertificateAttachedAt:     cd.CertificateAttachedAt,
+		ActivatedAt:               cd.ActivatedAt,
+	}, nil
+}
+
+// RetryProvisioning safely restarts custom domain provisioning after a terminal or transient failure.
+func (s *CustomDomainService) RetryProvisioning(
+	ctx context.Context,
+	projectID uuid.UUID,
+	customDomainID uuid.UUID,
+) (*domain.CustomDomain, error) {
+	if !s.automationEnabled {
+		return nil, ErrAutomationDisabled
+	}
+
+	cd, err := s.repo.GetByIDForProject(ctx, customDomainID, projectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomDomainNotFound) {
+			return nil, ErrCustomDomainNotFound
+		}
+		return nil, fmt.Errorf("get custom domain for retry: %w", err)
+	}
+
+	if cd.ProvisioningStatus != domain.ProvisioningStatusFailed {
+		return nil, ErrDomainNotEligibleForRetry
+	}
+
+	if cd.Status != domain.CustomDomainStatusVerified {
+		return nil, ErrCustomDomainNotVerified
+	}
+
+	if cd.RoutingStatus != domain.CustomDomainRoutingStatusReady {
+		return nil, ErrCustomDomainRoutingNotReady
+	}
+
+	return s.performRetry(ctx, cd)
+}
+
+func (s *CustomDomainService) performRetry(
+	ctx context.Context,
+	cd *domain.CustomDomain,
+) (*domain.CustomDomain, error) {
+	targetState := domain.ProvisioningStatusRequestingCertificate
+	if cd.CertificateARN != nil && *cd.CertificateARN != "" {
+		if cd.CertificateValidationName == nil || *cd.CertificateValidationName == "" {
+			targetState = domain.ProvisioningStatusWaitingForValidationRecord
+		} else if cd.CertificateStatus != nil && *cd.CertificateStatus == domain.CertificateStatusIssued {
+			targetState = domain.ProvisioningStatusAttachingCertificate
+		} else {
+			targetState = domain.ProvisioningStatusWaitingForDNS
+		}
+	}
+
+	return s.repo.ResetProvisioningForRetry(ctx, cd.ID, cd.ProjectID, targetState)
+}
+
+func sanitizeProvisioningError(errStr string) string {
+	switch strings.ToUpper(strings.TrimSpace(errStr)) {
+	case "DOMAIN_VALIDATION_TIMED_OUT", "VALIDATION_TIMED_OUT":
+		return "ACM domain validation timed out"
+	case "FAILURE_REASON_NO_AVAILABLE_CONTACTS":
+		return "ACM validation failed: no available contacts"
+	case "FAILURE_REASON_ADDITIONAL_VERIFICATION_REQUIRED":
+		return "ACM validation failed: additional verification required"
+	case "REVOKED":
+		return "ACM certificate was revoked"
+	case "EXPIRED":
+		return "ACM certificate expired"
+	case "INACTIVE":
+		return "ACM certificate is inactive"
+	default:
+		return "An error occurred during certificate provisioning. Please retry or contact support."
+	}
 }

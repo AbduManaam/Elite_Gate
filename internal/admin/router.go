@@ -133,10 +133,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	upstreamSvc := service.NewUpstreamService(upstreamRepo, upstreamTargetRepo, logger)
 	policySvc := service.NewPolicyService(policyRepo, routeRepo, logger)
 	apiKeySvc := service.NewApiKeyService(apiKeyRepo, logger)
-	customDomainSvc := service.NewCustomDomainService(
+	customDomainSvc := service.NewCustomDomainServiceWithAutomation(
 		customDomainRepo,
 		net.DefaultResolver,
 		cfg.Server.GatewayHostPublic,
+		cfg.AWS.AutomationEnabled,
 		logger,
 	)
 
@@ -370,6 +371,24 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 					"/:domainId/activate",
 					middleware.RBAC(middleware.RoleOwner),
 					customDomainHandler.Activate,
+				)
+
+				customDomains.GET(
+					"/:domainId/provisioning-status",
+					middleware.RBAC(middleware.RoleViewer),
+					customDomainHandler.GetProvisioningStatus,
+				)
+
+				customDomains.POST(
+					"/:domainId/retry-provisioning",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.RetryProvisioning,
+				)
+
+				customDomains.POST(
+					"/:domainId/retry-deprovisioning",
+					middleware.RBAC(middleware.RoleOwner),
+					customDomainHandler.RetryDeprovisioning,
 				)
 			}
 			auditLogs := projectGroup.Group("/audit-logs")
