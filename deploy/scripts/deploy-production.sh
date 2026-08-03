@@ -369,12 +369,26 @@ start_new_gateway() {
 start_new_worker() {
   log "Starting the new Worker container..."
 
+  local docker_socket_gid
+
+  [[ -S /var/run/docker.sock ]] ||
+    fail "Docker socket was not found at /var/run/docker.sock."
+
+  docker_socket_gid="$(stat -c '%g' /var/run/docker.sock)"
+
+  [[ "$docker_socket_gid" =~ ^[0-9]+$ ]] ||
+    fail "Could not determine Docker socket group ID."
+
+  log "Granting Worker container access to Docker socket group ID ${docker_socket_gid}."
+
   docker run -d \
     --name "$WORKER_CONTAINER" \
     --restart unless-stopped \
     --env-file "$ENV_FILE" \
     --network elitegate_net \
     --network-alias elitegate-worker \
+    --group-add "$docker_socket_gid" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
     -p 127.0.0.1:9091:9091 \
     "$WORKER_IMAGE"
 }
