@@ -120,7 +120,34 @@ type Config struct {
 	AppEnv      string            `mapstructure:"app_env"`
 }
 
+type ServiceType string
+
+const (
+	ServiceAdmin   ServiceType = "admin"
+	ServiceGateway ServiceType = "gateway"
+	ServiceWorker  ServiceType = "worker"
+)
+
+func validateServiceType(service ServiceType) error {
+	switch service {
+	case ServiceAdmin, ServiceGateway, ServiceWorker:
+		return nil
+	default:
+		return fmt.Errorf("unsupported service type: %q", service)
+	}
+}
+
+// Deprecated: Use LoadConfigForService instead.
 func LoadConfig() (*Config, error) {
+	return LoadConfigForService(ServiceAdmin)
+}
+
+// LoadConfigForService loads configuration for a specific service type and enforces context-aware validation.
+func LoadConfigForService(service ServiceType) (*Config, error) {
+	if err := validateServiceType(service); err != nil {
+		return nil, err
+	}
+
 	// 1. Load .env file variables into runtime env if it exists
 	_ = gotenv.Load()
 
@@ -291,7 +318,7 @@ func LoadConfig() (*Config, error) {
 	if err := validateDuration("server.route_reload_interval", cfg.Server.RouteReloadInterval); err != nil {
 		return nil, err
 	}
-	if err := validateMailConfig(cfg.Mail, cfg.AppEnv == "production"); err != nil {
+	if err := validateMailConfig(cfg.Mail, cfg.AppEnv == "production", service); err != nil {
 		return nil, fmt.Errorf("mail configuration error: %w", err)
 	}
 	if err := validateAWSConfig(cfg.AWS); err != nil {
@@ -331,9 +358,9 @@ func validatePasswordResetURL(rawURL string, production bool) error {
 	return nil
 }
 
-func validateMailConfig(cfg MailConfig, production bool) error {
+func validateMailConfig(cfg MailConfig, production bool, service ServiceType) error {
 	if !cfg.Enabled {
-		if production {
+		if production && service == ServiceAdmin {
 			return errors.New("mail must be enabled (SMTP_ENABLED=true) in production")
 		}
 		return nil

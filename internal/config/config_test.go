@@ -176,3 +176,93 @@ func TestLoadConfig_AWSConfig(t *testing.T) {
 		t.Errorf("expected ALBHTTPSListenerARN to match, got %q", cfgValid.AWS.ALBHTTPSListenerARN)
 	}
 }
+
+func TestLoadConfigForService_UnknownService_ReturnsError(t *testing.T) {
+	_, err := LoadConfigForService("unknown_service")
+	if err == nil {
+		t.Fatal("expected error when passing unknown service type, got nil")
+	}
+}
+
+func TestLoadConfigForService_ProductionMailValidation(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	os.Setenv("APP_ENV", "production")
+	os.Setenv("SMTP_ENABLED", "false")
+
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("APP_ENV")
+		os.Unsetenv("SMTP_ENABLED")
+		os.Unsetenv("SMTP_HOST")
+		os.Unsetenv("SMTP_PORT")
+		os.Unsetenv("SMTP_FROM_EMAIL")
+	}()
+
+	// 1. ServiceAdmin in production with SMTP disabled must return error
+	_, err = LoadConfigForService(ServiceAdmin)
+	if err == nil {
+		t.Fatal("expected error loading Admin config in production when SMTP is disabled")
+	}
+
+	// 2. ServiceGateway in production with SMTP disabled must succeed
+	cfgGateway, err := LoadConfigForService(ServiceGateway)
+	if err != nil {
+		t.Fatalf("expected ServiceGateway to succeed in production with SMTP disabled, got error: %v", err)
+	}
+	if cfgGateway.Mail.Enabled {
+		t.Errorf("expected Mail.Enabled to be false for ServiceGateway")
+	}
+
+	// 3. ServiceWorker in production with SMTP disabled must succeed
+	cfgWorker, err := LoadConfigForService(ServiceWorker)
+	if err != nil {
+		t.Fatalf("expected ServiceWorker to succeed in production with SMTP disabled, got error: %v", err)
+	}
+	if cfgWorker.Mail.Enabled {
+		t.Errorf("expected Mail.Enabled to be false for ServiceWorker")
+	}
+
+	// 4. ServiceGateway in production with SMTP enabled performs full mail field validation
+	os.Setenv("SMTP_ENABLED", "true")
+	os.Setenv("SMTP_HOST", "") // empty host should fail validation
+	_, err = LoadConfigForService(ServiceGateway)
+	if err == nil {
+		t.Fatal("expected error when SMTP is enabled on ServiceGateway but host is empty")
+	}
+}
+
+func TestLoadConfigForService_DevelopmentMailValidation(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	os.Setenv("APP_ENV", "development")
+	os.Setenv("SMTP_ENABLED", "false")
+
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("APP_ENV")
+		os.Unsetenv("SMTP_ENABLED")
+	}()
+
+	// Development environment with SMTP disabled loads successfully for all services
+	for _, s := range []ServiceType{ServiceAdmin, ServiceGateway, ServiceWorker} {
+		_, err := LoadConfigForService(s)
+		if err != nil {
+			t.Errorf("expected %s in development to succeed with SMTP disabled, got: %v", s, err)
+		}
+	}
+}

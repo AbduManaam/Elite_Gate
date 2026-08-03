@@ -10,7 +10,7 @@ import (
 
 func main() {
 	//Load config
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfigForService(config.ServiceGateway)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot load config: %v\n", err)
 		os.Exit(1)

@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfigForService(config.ServiceAdmin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot load config: %v\n", err)
 		os.Exit(1)

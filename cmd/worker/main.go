@@ -22,7 +22,7 @@ func main() {
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 		With().Timestamp().Str("component", "worker").Logger()
 
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfigForService(config.ServiceWorker)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to load config")
 	}
