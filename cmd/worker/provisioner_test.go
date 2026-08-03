@@ -164,6 +164,8 @@ func TestRequestingCertificate_Success(t *testing.T) {
 			assert.Equal(t, domain.ProvisioningStatusWaitingForValidationRecord, params.NewStatus)
 			require.NotNil(t, params.CertificateARN)
 			assert.Equal(t, mockCertARN, *params.CertificateARN)
+			require.NotNil(t, params.CertificateManagedByEliteGate, "CertificateManagedByEliteGate must be set when requesting certificate")
+			assert.True(t, *params.CertificateManagedByEliteGate, "CertificateManagedByEliteGate must be true for requested ACM certificate")
 			return nil
 		},
 	}
@@ -204,6 +206,8 @@ func TestRequestingCertificate_ExistingARN_SkipsRequest(t *testing.T) {
 			advanceCalled = true
 			assert.Equal(t, existingARN, *params.CertificateARN)
 			assert.Equal(t, domain.ProvisioningStatusWaitingForValidationRecord, params.NewStatus)
+			require.NotNil(t, params.CertificateManagedByEliteGate, "CertificateManagedByEliteGate must be set for existing ARN path")
+			assert.True(t, *params.CertificateManagedByEliteGate)
 			return nil
 		},
 	}
@@ -1141,3 +1145,86 @@ func TestDeprovisioning_CrashAfterACMDelete_RecoveryCompletes(t *testing.T) {
 	assert.True(t, processed)
 	assert.True(t, markDeprovisionedCalled)
 }
+
+func TestProvisioningWorkflow_EndToEnd_ManagedFlagPersistence(t *testing.T) {
+	jobID := uuid.New()
+	leaseToken := uuid.New()
+	mockCertARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-managed-cert"
+
+	var managedFlagInState *bool
+
+	mockAWS := &aws.MockAWSClient{
+		RequestCertificateFn: func(ctx context.Context, hostname string, idempotencyToken string) (string, error) {
+			return mockCertARN, nil
+		},
+		DescribeCertificateFn: func(ctx context.Context, certificateARN string) (*aws.CertificateDetails, error) {
+			return &aws.CertificateDetails{
+				ARN:             certificateARN,
+				Status:          "ISSUED",
+				ValidationName:  "_a.app.example.com",
+				ValidationValue: "_b.acm-validations.aws",
+			}, nil
+		},
+		AttachCertificateToListenerFn: func(ctx context.Context, listenerARN, certificateARN string) error {
+			return nil
+		},
+	}
+
+	completedCalled := false
+	failedCalled := false
+
+	mockRepo := &mockProvisioningRepo{
+		AdvanceProvisioningStateFn: func(ctx context.Context, params storage.AdvanceProvisioningParams) error {
+			if params.CertificateManagedByEliteGate != nil {
+				managedFlagInState = params.CertificateManagedByEliteGate
+			}
+			return nil
+		},
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+			completedCalled = true
+			return nil
+		},
+		MarkProvisioningFailedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, expectedStatus string, provisioningError string) error {
+			failedCalled = true
+			t.Fatalf("Provisioning unexpectedly failed: %s", provisioningError)
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+
+	// Step 1: requesting_certificate state -> requests ACM cert, persists managed=true
+	job1 := &domain.ProvisioningJob{
+		ID:                 jobID,
+		Hostname:           "app.example.com",
+		ProvisioningStatus: domain.ProvisioningStatusRequestingCertificate,
+		LeaseToken:         &leaseToken,
+	}
+	mockRepo.ClaimNextProvisioningJobFn = func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+		return job1, nil
+	}
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	require.NotNil(t, managedFlagInState, "AdvanceProvisioningState must have received CertificateManagedByEliteGate")
+	assert.True(t, *managedFlagInState, "CertificateManagedByEliteGate must be set to true upon certificate request")
+
+	// Step 2: attaching_certificate state -> check job has CertificateManagedByEliteGate = true
+	job2 := &domain.ProvisioningJob{
+		ID:                            jobID,
+		Hostname:                      "app.example.com",
+		ProvisioningStatus:            domain.ProvisioningStatusAttachingCertificate,
+		CertificateARN:                &mockCertARN,
+		CertificateManagedByEliteGate: true, // Persisted value loaded from DB
+		LeaseToken:                    &leaseToken,
+	}
+	mockRepo.ClaimNextProvisioningJobFn = func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+		return job2, nil
+	}
+	processed, err = provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.False(t, failedCalled, "Worker must NOT fail with 'certificate is not managed by EliteGate'")
+	assert.True(t, completedCalled, "Provisioning must complete successfully")
+}
+

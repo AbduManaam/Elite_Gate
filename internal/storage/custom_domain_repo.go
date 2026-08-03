@@ -566,18 +566,19 @@ func (r *CustomDomainRepo) ListEligibleSyncDomains(
 
 // AdvanceProvisioningParams contains parameters for advancing provisioning state.
 type AdvanceProvisioningParams struct {
-	ID                         uuid.UUID
-	LeaseToken                 uuid.UUID
-	ExpectedStatus             string
-	NewStatus                  string
-	CertificateARN             *string
-	CertificateStatus          *string
-	CertificateValidationName  *string
-	CertificateValidationValue *string
-	CertificateRequestedAt     *time.Time
-	CertificateIssuedAt        *time.Time
-	CertificateAttachedAt      *time.Time
-	NextRetryAt                *time.Time
+	ID                            uuid.UUID
+	LeaseToken                    uuid.UUID
+	ExpectedStatus                string
+	NewStatus                     string
+	CertificateARN                *string
+	CertificateStatus             *string
+	CertificateManagedByEliteGate *bool
+	CertificateValidationName     *string
+	CertificateValidationValue    *string
+	CertificateRequestedAt        *time.Time
+	CertificateIssuedAt           *time.Time
+	CertificateAttachedAt         *time.Time
+	NextRetryAt                   *time.Time
 }
 
 func scanProvisioningJobRow(scanner interface{ Scan(dest ...any) error }) (*domain.ProvisioningJob, error) {
@@ -728,12 +729,13 @@ func (r *CustomDomainRepo) AdvanceProvisioningState(
 			provisioning_status = $3,
 			certificate_arn = COALESCE($4, certificate_arn),
 			certificate_status = COALESCE($5, certificate_status),
-			certificate_validation_name = COALESCE($6, certificate_validation_name),
-			certificate_validation_value = COALESCE($7, certificate_validation_value),
-			certificate_requested_at = COALESCE($8, certificate_requested_at),
-			certificate_issued_at = COALESCE($9, certificate_issued_at),
-			certificate_attached_at = COALESCE($10, certificate_attached_at),
-			next_retry_at = $11,
+			certificate_managed_by_elitegate = COALESCE($6, certificate_managed_by_elitegate),
+			certificate_validation_name = COALESCE($7, certificate_validation_name),
+			certificate_validation_value = COALESCE($8, certificate_validation_value),
+			certificate_requested_at = COALESCE($9, certificate_requested_at),
+			certificate_issued_at = COALESCE($10, certificate_issued_at),
+			certificate_attached_at = COALESCE($11, certificate_attached_at),
+			next_retry_at = $12,
 			provisioning_error = NULL,
 			locked_at = NULL,
 			locked_by = NULL,
@@ -741,7 +743,7 @@ func (r *CustomDomainRepo) AdvanceProvisioningState(
 			updated_at = NOW()
 		WHERE id = $1
 		  AND lease_token = $2
-		  AND provisioning_status = $12
+		  AND provisioning_status = $13
 		  AND deleted_at IS NULL
 	`
 
@@ -753,6 +755,7 @@ func (r *CustomDomainRepo) AdvanceProvisioningState(
 		params.NewStatus,
 		params.CertificateARN,
 		params.CertificateStatus,
+		params.CertificateManagedByEliteGate,
 		params.CertificateValidationName,
 		params.CertificateValidationValue,
 		params.CertificateRequestedAt,

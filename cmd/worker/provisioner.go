@@ -248,6 +248,7 @@ func (p *Provisioner) handleRequestingCertificate(ctx context.Context, job *doma
 	}
 	leaseToken := *job.LeaseToken
 
+	managed := true
 	if job.CertificateARN != nil && *job.CertificateARN != "" {
 		p.logger.Info().
 			Str("job_id", job.ID.String()).
@@ -258,14 +259,15 @@ func (p *Provisioner) handleRequestingCertificate(ctx context.Context, job *doma
 		pendingValidation := "pending_validation"
 		now := p.now()
 		return p.repo.AdvanceProvisioningState(ctx, storage.AdvanceProvisioningParams{
-			ID:                     job.ID,
-			LeaseToken:             leaseToken,
-			ExpectedStatus:         domain.ProvisioningStatusRequestingCertificate,
-			NewStatus:              domain.ProvisioningStatusWaitingForValidationRecord,
-			CertificateARN:         job.CertificateARN,
-			CertificateStatus:      &pendingValidation,
-			CertificateRequestedAt: &now,
-			NextRetryAt:            &now,
+			ID:                            job.ID,
+			LeaseToken:                    leaseToken,
+			ExpectedStatus:                domain.ProvisioningStatusRequestingCertificate,
+			NewStatus:                     domain.ProvisioningStatusWaitingForValidationRecord,
+			CertificateARN:                job.CertificateARN,
+			CertificateStatus:             &pendingValidation,
+			CertificateManagedByEliteGate: &managed,
+			CertificateRequestedAt:        &now,
+			NextRetryAt:                   &now,
 		})
 	}
 
@@ -315,14 +317,15 @@ func (p *Provisioner) handleRequestingCertificate(ctx context.Context, job *doma
 	pendingValidation := "pending_validation"
 	now := p.now()
 	return p.repo.AdvanceProvisioningState(ctx, storage.AdvanceProvisioningParams{
-		ID:                     job.ID,
-		LeaseToken:             leaseToken,
-		ExpectedStatus:         domain.ProvisioningStatusRequestingCertificate,
-		NewStatus:              domain.ProvisioningStatusWaitingForValidationRecord,
-		CertificateARN:         &certARN,
-		CertificateStatus:      &pendingValidation,
-		CertificateRequestedAt: &now,
-		NextRetryAt:            &now,
+		ID:                            job.ID,
+		LeaseToken:                    leaseToken,
+		ExpectedStatus:                domain.ProvisioningStatusRequestingCertificate,
+		NewStatus:                     domain.ProvisioningStatusWaitingForValidationRecord,
+		CertificateARN:                &certARN,
+		CertificateStatus:             &pendingValidation,
+		CertificateManagedByEliteGate: &managed,
+		CertificateRequestedAt:        &now,
+		NextRetryAt:                   &now,
 	})
 }
 

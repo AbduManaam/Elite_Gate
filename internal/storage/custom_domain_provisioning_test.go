@@ -184,8 +184,10 @@ func TestAdvanceProvisioningState_Success(t *testing.T) {
 	db := initProvisioningMockDB(t)
 	defer db.Close()
 
+	var passedArgs []driver.Value
 	provisioningSqlDrv.mu.Lock()
 	provisioningSqlDrv.execFn = func(query string, args []driver.Value) (driver.Result, error) {
+		passedArgs = args
 		return &mockProvisioningResult{rowsAffected: 1}, nil
 	}
 	provisioningSqlDrv.mu.Unlock()
@@ -198,6 +200,35 @@ func TestAdvanceProvisioningState_Success(t *testing.T) {
 		NewStatus:      domain.ProvisioningStatusWaitingForValidationRecord,
 	})
 	require.NoError(t, err)
+	require.Len(t, passedArgs, 13, "ExecContext must pass 13 parameters to SQL query")
+	assert.Nil(t, passedArgs[5], "CertificateManagedByEliteGate arg ($6) should be nil when not provided")
+}
+
+func TestAdvanceProvisioningState_WithManagedFlag(t *testing.T) {
+	db := initProvisioningMockDB(t)
+	defer db.Close()
+
+	managed := true
+	var passedArgs []driver.Value
+	provisioningSqlDrv.mu.Lock()
+	provisioningSqlDrv.execFn = func(query string, args []driver.Value) (driver.Result, error) {
+		passedArgs = args
+		return &mockProvisioningResult{rowsAffected: 1}, nil
+	}
+	provisioningSqlDrv.mu.Unlock()
+
+	repo := NewCustomDomainRepo(db, zerolog.Nop())
+	err := repo.AdvanceProvisioningState(context.Background(), AdvanceProvisioningParams{
+		ID:                            uuid.New(),
+		LeaseToken:                    uuid.New(),
+		ExpectedStatus:                domain.ProvisioningStatusRequestingCertificate,
+		NewStatus:                     domain.ProvisioningStatusWaitingForValidationRecord,
+		CertificateManagedByEliteGate: &managed,
+	})
+	require.NoError(t, err)
+	require.Len(t, passedArgs, 13, "ExecContext must pass 13 parameters to SQL query")
+	require.NotNil(t, passedArgs[5], "CertificateManagedByEliteGate arg ($6) must be provided")
+	assert.Equal(t, true, passedArgs[5])
 }
 
 func TestAdvanceProvisioningState_StaleLease(t *testing.T) {
