@@ -34,7 +34,7 @@ const listQuery = `
 		r.match_type,
 		r.enabled,
 		r.policy_id,
-		COALESCE(p.auth_required, TRUE)   AS auth_required,
+		COALESCE(p.auth_required, FALSE)   AS auth_required,
 		COALESCE(p.rate_limit_rpm, 0)     AS rate_limit_rpm,
 		COALESCE(p.allowed_origins, '{}') AS allowed_origins,
 		COALESCE(p.allowed_roles,   '{}') AS allowed_roles,
