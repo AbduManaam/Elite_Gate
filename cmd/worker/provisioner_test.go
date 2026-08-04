@@ -1227,4 +1227,3 @@ func TestProvisioningWorkflow_EndToEnd_ManagedFlagPersistence(t *testing.T) {
 	assert.False(t, failedCalled, "Worker must NOT fail with 'certificate is not managed by EliteGate'")
 	assert.True(t, completedCalled, "Provisioning must complete successfully")
 }
-
