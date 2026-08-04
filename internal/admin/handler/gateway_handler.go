@@ -132,103 +132,92 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 	})
 }
 
-// Decommission handles DELETE /admin/v1/projects/:projectId/gateways/:gatewayId
+// Decommission handles DELETE /admin/v1/projects/:projectId/gateways/:gatewayId.
 //
-// Flow:
-//  1. Check status. If active, transition to "draining" and wait out the
-//     remaining drain window (idempotent against retries — see MarkDraining).
-//  2. Stop and remove the Docker container (idempotent).
-//  3. Mark decommissioned / soft-delete the DB row.
-//
-// A gateway that never makes it past step 1 (process restart, client
-// disconnect) is picked up and finished by the worker reconciler in
-// cmd/worker — see ListStaleDraining.
+// The request queues asynchronous cleanup. The Worker removes the ALB listener
+// rule, target registration, target group and Docker container before finally
+// marking the gateway as decommissioned.
 func (h *GatewayHandler) Decommission(c *gin.Context) {
 	externalID := c.Param("gatewayId")
 	if externalID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "gatewayId is required"})
-		return
-	}
-
-	// Validate format: Must be the human-readable external_id
-	if !strings.HasPrefix(externalID, "gw_") {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid gateway ID: please provide the external_id (e.g. 'gw_xxxx') instead of the database UUID",
+			"error": "gatewayId is required",
 		})
 		return
 	}
 
-	h.logger.Info().Str("external_id", externalID).Msg("initiating graceful decommission of gateway")
+	if !strings.HasPrefix(externalID, "gw_") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid gateway ID: provide the external_id, such as gw_xxxx",
+		})
+		return
+	}
 
-	status, err := h.repo.GetGatewayStatus(c.Request.Context(), externalID)
+	status, err := h.repo.GetGatewayStatus(
+		c.Request.Context(),
+		externalID,
+	)
 	if err != nil {
 		if errors.Is(err, storage.ErrGatewayNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "gateway not found",
+			})
 			return
 		}
-		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to retrieve gateway status")
+
+		helper.RespondInternalError(
+			c,
+			h.logger.With().Str("external_id", externalID).Logger(),
+			err,
+			"failed to retrieve gateway status",
+		)
 		return
 	}
 
 	if status == "decommissioned" {
-		c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+		c.JSON(http.StatusOK, gin.H{
+			"gateway_id": externalID,
+			"status":     "decommissioned",
+		})
 		return
 	}
 
-	// Step 1 — mark draining (idempotent) and wait out whatever time is
-	// left on the drain window. drainStartedAt is stable across retries,
-	// so a duplicate request never shortens or restarts the wait.
-	drainStartedAt, err := h.repo.MarkDraining(c.Request.Context(), externalID)
+	drainStartedAt, cleanupReadyAt, err :=
+		h.repo.QueueGatewayDeprovisioning(
+			c.Request.Context(),
+			externalID,
+			h.drainTimeout,
+		)
 	if err != nil {
-		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to initiate draining")
-		return
-	}
-
-	if remaining := h.drainTimeout - time.Since(drainStartedAt); remaining > 0 {
-		h.logger.Info().
-			Str("external_id", externalID).
-			Dur("remaining", remaining).
-			Msg("draining: waiting for in-flight/upstream routing to clear")
-		select {
-		case <-c.Request.Context().Done():
-			// The client went away mid-wait. The row is already marked
-			// "draining" (excluded from ListActive), so no traffic is
-			// being lost by returning here — the worker reconciler will
-			// finish stopping the container and finalizing the DB row
-			// once drain_stale_after elapses. We deliberately do NOT
-			// treat this as an error requiring the caller to retry.
-			h.logger.Warn().Str("external_id", externalID).
-				Msg("client disconnected during drain wait; worker reconciler will finish decommission")
-			c.JSON(http.StatusAccepted, gin.H{"gateway_id": externalID, "status": "draining"})
-			return
-		case <-time.After(remaining):
-		}
-	}
-
-	// Step 2 — stop and remove the container gracefully.
-	h.logger.Info().Str("external_id", externalID).Msg("stopping and removing gateway container runtime")
-	if err := h.containerMgr.Decommission(c.Request.Context(), externalID); err != nil {
-		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, fmt.Sprintf("failed to stop container: %v", err))
-		return
-	}
-
-	// Step 3 — finalize decommission (soft-delete DB row).
-	h.logger.Info().Str("external_id", externalID).Msg("finalizing decommission in DB")
-	if err := h.repo.Decommission(c.Request.Context(), externalID); err != nil {
 		if errors.Is(err, storage.ErrGatewayNotFound) {
-			status, statusErr := h.repo.GetGatewayStatus(c.Request.Context(), externalID)
-			if statusErr == nil && status == "decommissioned" {
-				c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
-				return
-			}
-			c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "gateway not found",
+			})
 			return
 		}
-		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to decommission gateway in DB")
+
+		helper.RespondInternalError(
+			c,
+			h.logger.With().Str("external_id", externalID).Logger(),
+			err,
+			"failed to queue gateway deprovisioning",
+		)
 		return
 	}
-	h.logger.Info().Str("external_id", externalID).Msg("gateway decommissioned successfully")
-	c.JSON(http.StatusOK, gin.H{"gateway_id": externalID, "status": "decommissioned"})
+
+	h.logger.Info().
+		Str("external_id", externalID).
+		Time("drain_started_at", drainStartedAt).
+		Time("cleanup_ready_at", cleanupReadyAt).
+		Msg("gateway queued for asynchronous deprovisioning")
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"gateway_id":          externalID,
+		"status":              "draining",
+		"provisioning_status": "deprovisioning",
+		"drain_started_at":    drainStartedAt,
+		"cleanup_ready_at":    cleanupReadyAt,
+	})
 }
 
 // List handles GET /admin/v1/projects/:projectId/gateways

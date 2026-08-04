@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"elitegate/internal/aws"
+	"elitegate/internal/container"
 	"elitegate/internal/storage"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ const (
 	gatewayStatusRegisteringTarget      = "registering_target"
 	gatewayStatusCreatingListenerRule   = "creating_listener_rule"
 	gatewayStatusWaitingForTargetHealth = "waiting_for_target_health"
+	gatewayStatusDeprovisioning         = "deprovisioning"
 )
 
 type GatewayProvisioningRepository interface {
@@ -88,11 +90,17 @@ type GatewayProvisioningRepository interface {
 		leaseToken uuid.UUID,
 		message string,
 	) error
+	MarkGatewayDecommissioned(
+		ctx context.Context,
+		externalID string,
+		leaseToken uuid.UUID,
+	) error
 }
 
 type GatewayProvisioner struct {
 	repo               GatewayProvisioningRepository
 	loadBalancer       aws.DedicatedGatewayLoadBalancerManager
+	containerMgr       container.ContainerManager
 	workerID           string
 	listenerARN        string
 	vpcID              string
@@ -109,6 +117,7 @@ type GatewayProvisioner struct {
 func NewGatewayProvisioner(
 	repo GatewayProvisioningRepository,
 	loadBalancer aws.DedicatedGatewayLoadBalancerManager,
+	containerMgr container.ContainerManager,
 	workerID string,
 	listenerARN string,
 	vpcID string,
@@ -125,6 +134,7 @@ func NewGatewayProvisioner(
 	return &GatewayProvisioner{
 		repo:               repo,
 		loadBalancer:       loadBalancer,
+		containerMgr:       containerMgr,
 		workerID:           workerID,
 		listenerARN:        strings.TrimSpace(listenerARN),
 		vpcID:              strings.TrimSpace(vpcID),
@@ -172,6 +182,9 @@ func (p *GatewayProvisioner) ProcessNextJob(
 
 	case gatewayStatusWaitingForTargetHealth:
 		err = p.handleWaitingForTargetHealth(ctx, job)
+
+	case gatewayStatusDeprovisioning:
+		err = p.handleDeprovisioning(ctx, job)
 
 	default:
 		err = fmt.Errorf(
@@ -344,6 +357,79 @@ func (p *GatewayProvisioner) handleWaitingForTargetHealth(
 			p.now().Add(p.healthPollInterval),
 		)
 	}
+}
+
+// handleDeprovisioning removes the public ALB resources before removing the
+// Docker runtime and finally soft-deleting the gateway database row.
+func (p *GatewayProvisioner) handleDeprovisioning(
+	ctx context.Context,
+	job *storage.GatewayProvisioningJob,
+) error {
+	if job.ListenerRuleARN != "" {
+		if err := p.loadBalancer.DeleteGatewayHostRule(
+			ctx,
+			job.ListenerRuleARN,
+		); err != nil {
+			return p.retryOrFail(
+				ctx,
+				job,
+				fmt.Errorf("delete gateway listener rule: %w", err),
+			)
+		}
+	}
+
+	if job.TargetGroupARN != "" && job.HostPort > 0 {
+		if err := p.loadBalancer.DeregisterGatewayTarget(
+			ctx,
+			job.TargetGroupARN,
+			p.instanceID,
+			int32(job.HostPort),
+		); err != nil {
+			return p.retryOrFail(
+				ctx,
+				job,
+				fmt.Errorf("deregister gateway target: %w", err),
+			)
+		}
+	}
+
+	if job.TargetGroupARN != "" {
+		if err := p.loadBalancer.DeleteGatewayTargetGroup(
+			ctx,
+			job.TargetGroupARN,
+		); err != nil {
+			return p.retryOrFail(
+				ctx,
+				job,
+				fmt.Errorf("delete gateway target group: %w", err),
+			)
+		}
+	}
+
+	if p.containerMgr == nil {
+		return p.retryOrFail(
+			ctx,
+			job,
+			errors.New("Docker container manager is not configured"),
+		)
+	}
+
+	if err := p.containerMgr.Decommission(
+		ctx,
+		job.ExternalID,
+	); err != nil {
+		return p.retryOrFail(
+			ctx,
+			job,
+			fmt.Errorf("remove gateway container: %w", err),
+		)
+	}
+
+	return p.repo.MarkGatewayDecommissioned(
+		ctx,
+		job.ExternalID,
+		job.LeaseToken,
+	)
 }
 
 func (p *GatewayProvisioner) retryOrFail(

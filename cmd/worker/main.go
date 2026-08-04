@@ -170,6 +170,7 @@ func main() {
 		gatewayProvisioner := NewGatewayProvisioner(
 			gatewayRepo,
 			gatewayAWSClient,
+			containerMgr,
 			"gateway-worker-main",
 			dedicatedGatewayAWSConfig.ListenerARN,
 			dedicatedGatewayAWSConfig.VPCID,
