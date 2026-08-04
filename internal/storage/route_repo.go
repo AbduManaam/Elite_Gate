@@ -66,8 +66,12 @@ func (r *RouteRepo) ListEnabled(ctx context.Context) ([]model.Route, error) {
 	r.logger.Debug().Str("project_id", tc.ProjectID.String()).Msg("ListEnabled: tenant context found, listing isolated enabled routes")
 	var routes []model.Route
 	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
-		q := listQuery + ` WHERE r.enabled = TRUE AND r.deleted_at IS NULL ORDER BY length(r.path) DESC`
-		rows, err := tx.QueryContext(ctx, q)
+		q := listQuery + `
+			WHERE r.project_id = $1
+			  AND r.enabled = TRUE
+			  AND r.deleted_at IS NULL
+			ORDER BY length(r.path) DESC`
+		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
 			return err
 		}
@@ -132,16 +136,22 @@ func (r *RouteRepo) ListAll(ctx context.Context, limit, offset int) ([]model.Rou
 	var routes []model.Route
 	var total int
 	err = r.withTenantTx(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM routes WHERE deleted_at IS NULL").Scan(&total)
+		err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM routes WHERE project_id = $1 AND deleted_at IS NULL",
+			tc.ProjectID,
+		).Scan(&total)
 		if err != nil {
 			return err
 		}
 
-		q := listQuery + ` WHERE r.deleted_at IS NULL ORDER BY r.path ASC`
+		q := listQuery + `
+			WHERE r.project_id = $1
+			  AND r.deleted_at IS NULL
+			ORDER BY r.path ASC`
 		if limit > 0 {
 			q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 		}
-		rows, err := tx.QueryContext(ctx, q)
+		rows, err := tx.QueryContext(ctx, q, tc.ProjectID)
 		if err != nil {
 			return err
 		}
@@ -198,6 +208,11 @@ func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) erro
 	r.logger.Info().Str("route_id", id).Str("path", rt.Path).Msg("Update: initiating route update")
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
 		const q = `
 			UPDATE routes
 			SET    name         = $2,
@@ -208,11 +223,13 @@ func (r *RouteRepo) Update(ctx context.Context, id string, rt *model.Route) erro
 			       enabled      = $7,
 			       methods      = $8,
 			       updated_at   = NOW()
-			WHERE  id = $1 AND deleted_at IS NULL
+			WHERE  id = $1
+			  AND  project_id = $9
+			  AND  deleted_at IS NULL
 			RETURNING id, updated_at
 		`
-		err := tx.QueryRowContext(ctx, q,
-			id, rt.Name, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled, pq.Array(rt.Methods),
+		err = tx.QueryRowContext(ctx, q,
+			id, rt.Name, rt.Path, rt.UpstreamID, rt.PolicyID, rt.MatchType, rt.Enabled, pq.Array(rt.Methods), tc.ProjectID,
 		).Scan(&rt.ID, &rt.UpdatedAt)
 		if err == sql.ErrNoRows {
 			return ErrRouteNotFound
@@ -232,7 +249,17 @@ func (r *RouteRepo) Delete(ctx context.Context, id string) error {
 	r.logger.Info().Str("route_id", id).Msg("Delete: initiating route deletion")
 
 	err := r.withTenantTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE routes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
+		tc, err := TenantFromContext(ctx)
+		if err != nil {
+			return fmt.Errorf("get tenant context: %w", err)
+		}
+
+		res, err := tx.ExecContext(ctx, `
+			UPDATE routes
+			SET deleted_at = NOW()
+			WHERE id = $1
+			  AND project_id = $2
+			  AND deleted_at IS NULL`, id, tc.ProjectID)
 		if err != nil {
 			return err
 		}
