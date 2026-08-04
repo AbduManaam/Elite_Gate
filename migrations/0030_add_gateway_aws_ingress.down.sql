@@ -3,6 +3,9 @@ DROP INDEX IF EXISTS idx_gateways_listener_rule_priority;
 
 ALTER TABLE gateways
     DROP COLUMN IF EXISTS provisioned_at,
+    DROP COLUMN IF EXISTS lease_token,
+    DROP COLUMN IF EXISTS locked_by,
+    DROP COLUMN IF EXISTS locked_at,
     DROP COLUMN IF EXISTS next_retry_at,
     DROP COLUMN IF EXISTS retry_count,
     DROP COLUMN IF EXISTS provisioning_error,

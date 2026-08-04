@@ -8,10 +8,11 @@ ALTER TABLE gateways
     ADD COLUMN IF NOT EXISTS provisioning_error TEXT,
     ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS locked_by TEXT,
+    ADD COLUMN IF NOT EXISTS lease_token UUID,
     ADD COLUMN IF NOT EXISTS provisioned_at TIMESTAMPTZ;
 
--- Existing gateways currently store Docker's assigned host port in public_port.
--- Copy that value into the new dedicated host_port column.
 UPDATE gateways
 SET host_port = public_port::INTEGER
 WHERE host_port IS NULL
