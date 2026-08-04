@@ -111,7 +111,7 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 	}
 
 	// Step 3 — register real endpoint.
-	if err := h.repo.Register(c.Request.Context(), externalID, ip, port, publicHost, publicPort); err != nil {
+	if err := h.repo.MarkContainerReady(c.Request.Context(), externalID, ip, port, publicHost, publicPort); err != nil {
 		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to register gateway endpoint in DB")
 		return
 	}
@@ -292,3 +292,4 @@ func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
 		Pagination: service.BuildPagination(page, limit, total),
 	})
 }
+
