@@ -110,7 +110,7 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 		return
 	}
 
-	// Step 3 — register real endpoint.
+	// Step 3 — register real endpoint & queue for ALB provisioning.
 	if err := h.repo.MarkContainerReady(c.Request.Context(), externalID, ip, port, publicHost, publicPort); err != nil {
 		helper.RespondInternalError(c, h.logger.With().Str("external_id", externalID).Logger(), err, "failed to register gateway endpoint in DB")
 		return
@@ -119,16 +119,16 @@ func (h *GatewayHandler) Provision(c *gin.Context) {
 	h.logger.Info().
 		Str("external_id", externalID).
 		Str("endpoint_ip", ip).
-		Str("port", port).
-		Msg("gateway provisioned successfully")
+		Str("gateway_port", port).
+		Str("host_port", publicPort).
+		Msg("gateway container ready; ALB provisioning queued")
 
 	c.JSON(http.StatusAccepted, gin.H{
-		"gateway_id":   externalID,
-		"status":       "active",
-		"endpoint_ip":  ip,
-		"gateway_port": port,
-		"public_host":  publicHost,
-		"public_port":  publicPort,
+		"gateway_id":          externalID,
+		"status":              "provisioning",
+		"provisioning_status": "container_ready",
+		"host_port":           publicPort,
+		"message":             "Gateway container is ready and public HTTPS provisioning has been queued",
 	})
 }
 
@@ -292,4 +292,3 @@ func (h *GatewayHandler) ListAllForAdmin(c *gin.Context) {
 		Pagination: service.BuildPagination(page, limit, total),
 	})
 }
-

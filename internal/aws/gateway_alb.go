@@ -55,6 +55,18 @@ type gatewayALBAPI interface {
 		params *elasticloadbalancingv2.DeleteTargetGroupInput,
 		optFns ...func(*elasticloadbalancingv2.Options),
 	) (*elasticloadbalancingv2.DeleteTargetGroupOutput, error)
+
+	DescribeTargetGroups(
+		ctx context.Context,
+		params *elasticloadbalancingv2.DescribeTargetGroupsInput,
+		optFns ...func(*elasticloadbalancingv2.Options),
+	) (*elasticloadbalancingv2.DescribeTargetGroupsOutput, error)
+
+	DescribeRules(
+		ctx context.Context,
+		params *elasticloadbalancingv2.DescribeRulesInput,
+		optFns ...func(*elasticloadbalancingv2.Options),
+	) (*elasticloadbalancingv2.DescribeRulesOutput, error)
 }
 
 func (c *Client) gatewayALBClient() (gatewayALBAPI, error) {
@@ -88,6 +100,22 @@ func (c *Client) CreateGatewayTargetGroup(
 	vpcID = strings.TrimSpace(vpcID)
 	if name == "" || vpcID == "" {
 		return "", errors.New("target group name and VPC ID are required")
+	}
+
+	existing, lookupErr := client.DescribeTargetGroups(
+		ctx,
+		&elasticloadbalancingv2.DescribeTargetGroupsInput{
+			Names: []string{name},
+		},
+	)
+	if lookupErr == nil && len(existing.TargetGroups) > 0 {
+		arn := sdkaws.ToString(existing.TargetGroups[0].TargetGroupArn)
+		if arn != "" {
+			return arn, nil
+		}
+	}
+	if lookupErr != nil && !isNotFoundError(lookupErr) {
+		return "", fmt.Errorf("find existing gateway target group %s: %w", name, lookupErr)
 	}
 
 	output, err := client.CreateTargetGroup(
@@ -203,6 +231,29 @@ func (c *Client) CreateGatewayHostRule(
 		return "", err
 	}
 
+	existing, err := client.DescribeRules(
+		ctx,
+		&elasticloadbalancingv2.DescribeRulesInput{
+			ListenerArn: sdkaws.String(listenerARN),
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("describe existing listener rules: %w", err)
+	}
+
+	if ruleARN, conflict := findGatewayHostRule(
+		existing.Rules,
+		hostname,
+		targetGroupARN,
+	); ruleARN != "" {
+		return ruleARN, nil
+	} else if conflict {
+		return "", fmt.Errorf(
+			"hostname %s is already routed to another target group",
+			hostname,
+		)
+	}
+
 	output, err := client.CreateRule(
 		ctx,
 		&elasticloadbalancingv2.CreateRuleInput{
@@ -233,6 +284,54 @@ func (c *Client) CreateGatewayHostRule(
 	}
 
 	return sdkaws.ToString(output.Rules[0].RuleArn), nil
+}
+
+func findGatewayHostRule(
+	rules []albTypes.Rule,
+	hostname string,
+	targetGroupARN string,
+) (ruleARN string, conflict bool) {
+	expectedHost := strings.TrimSuffix(
+		strings.ToLower(strings.TrimSpace(hostname)),
+		".",
+	)
+
+	for _, rule := range rules {
+		hostMatches := false
+
+		for _, condition := range rule.Conditions {
+			if condition.HostHeaderConfig == nil {
+				continue
+			}
+
+			for _, value := range condition.HostHeaderConfig.Values {
+				currentHost := strings.TrimSuffix(
+					strings.ToLower(strings.TrimSpace(value)),
+					".",
+				)
+
+				if currentHost == expectedHost {
+					hostMatches = true
+					break
+				}
+			}
+		}
+
+		if !hostMatches {
+			continue
+		}
+
+		for _, action := range rule.Actions {
+			if action.Type == albTypes.ActionTypeEnumForward &&
+				sdkaws.ToString(action.TargetGroupArn) == targetGroupARN {
+				return sdkaws.ToString(rule.RuleArn), false
+			}
+		}
+
+		return "", true
+	}
+
+	return "", false
 }
 
 // DeleteGatewayHostRule removes the public hostname routing rule.

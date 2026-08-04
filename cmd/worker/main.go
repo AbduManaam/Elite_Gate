@@ -70,14 +70,16 @@ func main() {
 	}()
 
 	awsAutomationEnabled := os.Getenv("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED") == "true"
+	var awsClient *aws.Client
 	if awsAutomationEnabled {
 		region := os.Getenv("AWS_REGION")
 		listenerARN := os.Getenv("ALB_HTTPS_LISTENER_ARN")
 
-		awsClient, err := aws.NewClient(ctx, region, listenerARN, true)
+		client, err := aws.NewClient(ctx, region, listenerARN, true)
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to initialize AWS client")
 		}
+		awsClient = client
 
 		customDomainRepo := storage.NewCustomDomainRepo(db, logger)
 		provisioner := NewProvisioner(customDomainRepo, awsClient, awsClient, "worker-main", listenerARN, logger).
@@ -137,6 +139,81 @@ func main() {
 		logger.Info().Msg("ACM custom domain provisioner loop started")
 	} else {
 		logger.Info().Msg("CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED is false; ACM provisioner loop disabled")
+	}
+
+	dedicatedGatewayAWSConfig, err := loadDedicatedGatewayAutomationConfig()
+	if err != nil {
+		logger.Fatal().
+			Err(err).
+			Msg("invalid dedicated gateway AWS automation configuration")
+	}
+
+	if dedicatedGatewayAWSConfig.Enabled {
+		var gatewayAWSClient aws.DedicatedGatewayLoadBalancerManager
+		if awsClient != nil && os.Getenv("AWS_REGION") == dedicatedGatewayAWSConfig.Region && os.Getenv("ALB_HTTPS_LISTENER_ARN") == dedicatedGatewayAWSConfig.ListenerARN {
+			gatewayAWSClient = awsClient
+		} else {
+			client, err := aws.NewClient(
+				ctx,
+				dedicatedGatewayAWSConfig.Region,
+				dedicatedGatewayAWSConfig.ListenerARN,
+				true,
+			)
+			if err != nil {
+				logger.Fatal().
+					Err(err).
+					Msg("failed to initialize dedicated gateway AWS client")
+			}
+			gatewayAWSClient = client
+		}
+
+		gatewayProvisioner := NewGatewayProvisioner(
+			gatewayRepo,
+			gatewayAWSClient,
+			"gateway-worker-main",
+			dedicatedGatewayAWSConfig.ListenerARN,
+			dedicatedGatewayAWSConfig.VPCID,
+			dedicatedGatewayAWSConfig.InstanceID,
+			dedicatedGatewayAWSConfig.BaseDomain,
+			dedicatedGatewayAWSConfig.PriorityMin,
+			dedicatedGatewayAWSConfig.PriorityMax,
+			logger,
+		)
+
+		go func() {
+			gatewayTicker := time.NewTicker(5 * time.Second)
+			defer gatewayTicker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case <-gatewayTicker.C:
+					processed, processErr := gatewayProvisioner.ProcessNextJob(ctx)
+					if processErr != nil {
+						logger.Error().
+							Err(processErr).
+							Msg("dedicated gateway provisioning iteration failed")
+						continue
+					}
+
+					if processed {
+						logger.Debug().
+							Msg("dedicated gateway provisioning job processed")
+					}
+				}
+			}
+		}()
+
+		logger.Info().
+			Str("base_domain", dedicatedGatewayAWSConfig.BaseDomain).
+			Int("priority_min", dedicatedGatewayAWSConfig.PriorityMin).
+			Int("priority_max", dedicatedGatewayAWSConfig.PriorityMax).
+			Msg("dedicated gateway ALB provisioner loop started")
+	} else {
+		logger.Info().
+			Msg("dedicated gateway AWS automation is disabled")
 	}
 
 	ticker := time.NewTicker(30 * time.Second)

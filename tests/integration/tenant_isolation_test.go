@@ -29,6 +29,9 @@ func testAppDSN() string {
 }
 
 func TestTenantIsolation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	// Connect to development DB as superuser to set up permissions and test data
 	dsn := testAdminDSN()
 	db, err := sql.Open("postgres", dsn)
@@ -212,6 +215,9 @@ func TestTenantIsolation(t *testing.T) {
 }
 
 func TestGatewayListAllForAdmin(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	// Connect to development DB as superuser
 	dsn := testAdminDSN()
 	db, err := sql.Open("postgres", dsn)
