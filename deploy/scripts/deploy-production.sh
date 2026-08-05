@@ -139,6 +139,12 @@ build_environment_file() {
   local aws_region_param
   local alb_listener_arn
   local worker_metrics_addr
+  local dedicated_gateway_automation_enabled
+  local aws_vpc_id
+  local aws_ec2_instance_id
+  local dedicated_gateway_base_domain
+  local dedicated_gateway_priority_min
+  local dedicated_gateway_priority_max
 
   app_environment="$(get_parameter "/elitegate/production/app/environment")"
   admin_port="$(get_parameter "/elitegate/production/admin/port")"
@@ -162,7 +168,12 @@ build_environment_file() {
   aws_region_param="$(get_parameter "/elitegate/production/aws/region" 2>/dev/null || echo "${AWS_REGION}")"
   alb_listener_arn="$(get_parameter "/elitegate/production/alb/https_listener_arn" 2>/dev/null || true)"
   worker_metrics_addr="$(get_parameter "/elitegate/production/worker/metrics_addr" 2>/dev/null || echo ":9091")"
-
+  dedicated_gateway_automation_enabled="$(get_parameter "/elitegate/production/gateway/dedicated_automation_enabled" 2>/dev/null || echo "false")"
+  aws_vpc_id="$(get_parameter "/elitegate/production/aws/vpc_id" 2>/dev/null || true)" 
+  aws_ec2_instance_id="$(get_parameter "/elitegate/production/aws/ec2_instance_id" 2>/dev/null || true)"
+  dedicated_gateway_base_domain="$(get_parameter "/elitegate/production/gateway/dedicated_base_domain" 2>/dev/null || echo "elitegateway.site")"
+  dedicated_gateway_priority_min="$(get_parameter "/elitegate/production/gateway/dedicated_rule_priority_min" 2>/dev/null || echo "1000")"
+  dedicated_gateway_priority_max="$(get_parameter "/elitegate/production/gateway/dedicated_rule_priority_max" 2>/dev/null || echo "40000")"
   local db_username
   local db_password
   local db_host
@@ -274,6 +285,14 @@ GATEWAY_IMAGE_NAME=${GATEWAY_IMAGE}
 CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED=${automation_enabled}
 AWS_REGION=${aws_region_param}
 ALB_HTTPS_LISTENER_ARN=${alb_listener_arn}
+
+DEDICATED_GATEWAY_AWS_AUTOMATION_ENABLED=${dedicated_gateway_automation_enabled}
+AWS_VPC_ID=${aws_vpc_id}
+AWS_EC2_INSTANCE_ID=${aws_ec2_instance_id}
+DEDICATED_GATEWAY_BASE_DOMAIN=${dedicated_gateway_base_domain}
+DEDICATED_GATEWAY_RULE_PRIORITY_MIN=${dedicated_gateway_priority_min}
+DEDICATED_GATEWAY_RULE_PRIORITY_MAX=${dedicated_gateway_priority_max}
+
 WORKER_METRICS_ADDR=${worker_metrics_addr}
 EOF
 

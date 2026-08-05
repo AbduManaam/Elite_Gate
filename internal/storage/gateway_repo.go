@@ -483,6 +483,7 @@ func (r *GatewayRepo) ListStaleDraining(ctx context.Context, staleAfter time.Dur
 		FROM   gateways
 		WHERE  status           = 'draining'
 		  AND  deleted_at       IS NULL
+		  AND  COALESCE(provisioning_status, '') <> 'deprovisioning'
 		  AND  drain_started_at IS NOT NULL
 		  AND  drain_started_at < NOW() - $1::interval
 	`

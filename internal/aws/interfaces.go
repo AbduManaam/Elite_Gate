@@ -33,3 +33,52 @@ type AWSProvisioner interface {
 	CertificateManager
 	LoadBalancerManager
 }
+
+// DedicatedGatewayLoadBalancerManager defines ALB operations required for
+// exposing and removing dedicated gateway containers.
+type DedicatedGatewayLoadBalancerManager interface {
+	CreateGatewayTargetGroup(
+		ctx context.Context,
+		name string,
+		vpcID string,
+	) (targetGroupARN string, err error)
+
+	RegisterGatewayTarget(
+		ctx context.Context,
+		targetGroupARN string,
+		instanceID string,
+		port int32,
+	) error
+
+	GetGatewayTargetHealth(
+		ctx context.Context,
+		targetGroupARN string,
+		instanceID string,
+		port int32,
+	) (state string, err error)
+
+	CreateGatewayHostRule(
+		ctx context.Context,
+		listenerARN string,
+		hostname string,
+		targetGroupARN string,
+		priority int32,
+	) (ruleARN string, err error)
+
+	DeleteGatewayHostRule(
+		ctx context.Context,
+		ruleARN string,
+	) error
+
+	DeregisterGatewayTarget(
+		ctx context.Context,
+		targetGroupARN string,
+		instanceID string,
+		port int32,
+	) error
+
+	DeleteGatewayTargetGroup(
+		ctx context.Context,
+		targetGroupARN string,
+	) error
+}
