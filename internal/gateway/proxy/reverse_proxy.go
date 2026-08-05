@@ -39,17 +39,14 @@ func New(targetURL string, hostMap map[string]string) (*ReverseProxy, error) {
 	// Custom director — runs before the request is forwarded
 	originalDirector := p.Director
 	p.Director = func(req *http.Request) {
+		originalHost := req.Host
 		originalDirector(req)
-		req.Header.Set("X-Forwarded-Host", req.Host)
-		req.Header.Set("X-Gateway", "elitegate/1.0")
-		req.Host = target.Host
 
-		// Strip /api prefix if present so that upstreams receive clean paths (e.g. /users/1)
-		if strings.HasPrefix(req.URL.Path, "/api/") {
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api")
-		} else if req.URL.Path == "/api" {
-			req.URL.Path = "/"
-		}
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.Host = target.Host
+		req.Header.Set("X-Forwarded-Host", originalHost)
+		req.Header.Set("X-Gateway", "elitegate/1.0")
 
 		// Forward authenticated identity as trusted headers so upstreams
 		// can use them directly without re-validating credentials.
@@ -63,10 +60,8 @@ func New(targetURL string, hostMap map[string]string) (*ReverseProxy, error) {
 			req.Header.Set("X-Client-Scopes", strings.Join(scopes, ","))
 		}
 
-		// Strip raw credentials — upstreams must never see them.
-		// Identity is already forwarded via X-Client-ID / X-Client-Role above.
+		// Strip raw API key — upstreams use X-Client-* headers above.
 		req.Header.Del("X-API-Key")
-		req.Header.Del("Authorization")
 	}
 
 	// Custom error handler — prevents panic on upstream failure
