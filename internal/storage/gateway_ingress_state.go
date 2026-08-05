@@ -133,7 +133,7 @@ FOR UPDATE
 		ctx,
 		`
 SELECT candidate
-FROM generate_series($1, $2) AS candidate
+FROM generate_series($1::integer, $2::integer) AS candidate
 WHERE NOT EXISTS (
 SELECT 1
 FROM gateways
