@@ -51,7 +51,9 @@ func TestGatewayRouter_EndToEnd(t *testing.T) {
 		{ID: "r_products_filter", Path: "/products/filter", UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "exact"},
 		{ID: "r_products_id", Path: "/products/:id", UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "exact"},
 		{ID: "r_api_addresses", Path: "/api/addresses", UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "exact"},
-		{ID: "r_orders", Path: "/api/orders", UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "prefix", AllowedOrigins: []string{"*"}},
+		{ID: "r_wishlist", Path: "/api/wishlist", Methods: []string{"GET", "POST"}, UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "exact"},
+		{ID: "r_orders", Path: "/api/orders", Methods: []string{"GET", "POST", "PUT", "DELETE"}, UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "prefix", AllowedOrigins: []string{"*"}},
+		{ID: "r_protected", Path: "/api/protected", Methods: []string{"POST"}, UpstreamURL: upstream.URL, Protocol: "http", Enabled: true, MatchType: "exact", AuthRequired: true},
 	}
 
 	snap := &runtime.Snapshot{
@@ -196,18 +198,86 @@ func TestGatewayRouter_EndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("OPTIONS CORS preflight works", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodOptions, "/api/orders", nil)
+	t.Run("No Policy route forwards OPTIONS to upstream", func(t *testing.T) {
+		lastUpstreamMethod = ""
+		req := httptest.NewRequest(http.MethodOptions, "/api/wishlist", nil)
 		req.Header.Set("Origin", "http://example.com")
 		req.Header.Set("Access-Control-Request-Method", "POST")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 from upstream for No Policy OPTIONS, got %d", rec.Code)
+		}
+		if lastUpstreamMethod != "OPTIONS" {
+			t.Errorf("expected OPTIONS method to reach upstream, got %s", lastUpstreamMethod)
+		}
+	})
+
+	t.Run("CORS Policy route returns 204 without upstream call", func(t *testing.T) {
+		lastUpstreamMethod = ""
+		req := httptest.NewRequest(http.MethodOptions, "/api/orders", nil)
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Access-Control-Request-Method", "PUT")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
 		if rec.Code != http.StatusNoContent {
-			t.Errorf("expected 204 No Content for CORS preflight, got %d", rec.Code)
+			t.Errorf("expected 204 No Content for CORS Policy preflight, got %d", rec.Code)
 		}
 		if rec.Header().Get("Access-Control-Allow-Origin") == "" {
 			t.Errorf("expected Access-Control-Allow-Origin header")
+		}
+		if lastUpstreamMethod != "" {
+			t.Errorf("expected NO upstream call for CORS Policy preflight, but got %s", lastUpstreamMethod)
+		}
+	})
+
+	t.Run("CORS Policy DELETE preflight works", func(t *testing.T) {
+		lastUpstreamMethod = ""
+		req := httptest.NewRequest(http.MethodOptions, "/api/orders", nil)
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Access-Control-Request-Method", "DELETE")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("expected 204 No Content for DELETE preflight, got %d", rec.Code)
+		}
+	})
+
+	t.Run("Invalid requested method in preflight rejected with 404", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodOptions, "/api/wishlist", nil)
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Access-Control-Request-Method", "DELETE") // wishlist only supports GET & POST
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404 for unallowed method DELETE preflight, got %d", rec.Code)
+		}
+	})
+
+	t.Run("Authentication enforced for normal POST request", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/protected", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for unauthenticated POST request, got %d", rec.Code)
+		}
+	})
+
+	t.Run("Preflight bypasses authentication for protected route", func(t *testing.T) {
+		lastUpstreamMethod = ""
+		req := httptest.NewRequest(http.MethodOptions, "/api/protected", nil)
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 from upstream for protected route preflight, got %d", rec.Code)
 		}
 	})
 

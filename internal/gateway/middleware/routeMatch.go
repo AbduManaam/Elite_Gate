@@ -3,11 +3,21 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"elitegate/internal/gateway/router"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/shared"
 )
+
+func isPreflight(r *http.Request) bool {
+	if r.Method != http.MethodOptions {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	acrm := strings.TrimSpace(r.Header.Get("Access-Control-Request-Method"))
+	return origin != "" && acrm != ""
+}
 
 func RouteMatcher(loader *runtime.Loader) MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
@@ -27,7 +37,14 @@ func RouteMatcher(loader *runtime.Loader) MiddlewareFunc {
 				req = r.WithContext(ctx)
 			}
 
-			rt := router.MatchHTTP(req.URL.Path, req.Method, snap.Routes)
+			methodToMatch := req.Method
+			if isPreflight(req) {
+				if acrm := strings.ToUpper(strings.TrimSpace(req.Header.Get("Access-Control-Request-Method"))); acrm != "" {
+					methodToMatch = acrm
+				}
+			}
+
+			rt := router.MatchHTTP(req.URL.Path, methodToMatch, snap.Routes)
 			if rt == nil {
 				httpJSON(w, http.StatusNotFound, map[string]string{
 					"error": "route not found",

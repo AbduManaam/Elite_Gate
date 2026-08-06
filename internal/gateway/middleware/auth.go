@@ -34,7 +34,7 @@ func NewAuthMiddleware(jwtValidator *auth.JWTValidator, keyStore APIKeyStore, lo
 
 func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPublicPath(r.URL.Path) {
+		if isPublicPath(r.URL.Path) || isPreflight(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
