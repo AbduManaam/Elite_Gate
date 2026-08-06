@@ -48,6 +48,14 @@ func (l *Loader) SetHealthChecker(hc *health.Checker) {
 	l.health = hc
 }
 
+func (l *Loader) SetSnapshotForTest(snap *Snapshot) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if snap != nil {
+		l.snapshot = *snap
+	}
+}
+
 func (l *Loader) Start(ctx context.Context) error {
 	if err := l.reload(ctx); err != nil {
 		return err

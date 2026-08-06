@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 
 	"elitegate/internal/config"
 	"elitegate/internal/gateway/handler"
@@ -43,6 +44,26 @@ func NewRouter(
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		expectedToken := cfg.Auth.GatewaySyncToken
+		if expectedToken == "" {
+			expectedToken = cfg.Auth.JWTSecret
+		}
+
+		clientToken := r.Header.Get("X-Internal-Token")
+		if clientToken == "" {
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				clientToken = strings.TrimPrefix(authHeader, "Bearer ")
+			}
+		}
+
+		if clientToken == "" || clientToken != expectedToken {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized","detail":"valid internal token required"}`))
+			return
+		}
+
 		if err := loader.Reload(r.Context()); err != nil {
 			logger.Error().Err(err).Msg("manual reload endpoint trigger failed")
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -57,7 +78,9 @@ func NewRouter(
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 
-	apiHandler := middleware.Chain(
+	mux.Handle("/metrics", promhttp.Handler())
+
+	customerHandler := middleware.Chain(
 		dynamic,
 		middleware.RouteMatcher(loader),
 		metrics.Middleware,
@@ -66,8 +89,7 @@ func NewRouter(
 		authMiddleware.Middleware,
 		rlMiddleware.Middleware,
 	)
-	mux.Handle("/api/", apiHandler)
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", customerHandler)
 
 	return middleware.Chain(
 		mux,

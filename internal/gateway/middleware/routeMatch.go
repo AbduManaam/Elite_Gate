@@ -27,7 +27,7 @@ func RouteMatcher(loader *runtime.Loader) MiddlewareFunc {
 				req = r.WithContext(ctx)
 			}
 
-			rt := router.MatchHTTP(req.URL.Path, snap.Routes)
+			rt := router.MatchHTTP(req.URL.Path, req.Method, snap.Routes)
 			if rt == nil {
 				httpJSON(w, http.StatusNotFound, map[string]string{
 					"error": "route not found",
