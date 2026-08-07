@@ -319,8 +319,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				members.GET("", middleware.RBAC(middleware.RoleViewer), membershipHandler.List)
 				members.GET("/lookup", middleware.RBAC(middleware.RoleOwner), userLookupLimit, membershipHandler.LookupMemberByEmail)
 				members.POST("", middleware.RBAC(middleware.RoleOwner), membershipHandler.AddMember)
-				members.PUT("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.ChangeRole)
-				members.DELETE("/:memberId", middleware.RBAC(middleware.RoleOwner), membershipHandler.RemoveMember)
+				members.PUT("/:adminUserId", middleware.RBAC(middleware.RoleOwner), membershipHandler.ChangeRole)
+				members.DELETE("/:adminUserId", middleware.RBAC(middleware.RoleOwner), membershipHandler.RemoveMember)
 			}
 			keys := projectGroup.Group("/keys")
 			{
