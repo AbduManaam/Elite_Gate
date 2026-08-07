@@ -406,8 +406,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				projectMetrics.GET("/query", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryInstant)
 				projectMetrics.GET("/query-range", middleware.RBAC(middleware.RoleViewer), metricsHandler.QueryRange)
 				projectMetrics.GET("/summary", middleware.RBAC(middleware.RoleViewer), metricsHandler.Summary)
-				projectMetrics.GET("/system", middleware.RBAC(middleware.RoleEditor), metricsHandler.SystemMetrics)
-				projectMetrics.GET("/system/range", middleware.RBAC(middleware.RoleEditor), metricsHandler.SystemMetricsRange)
+				projectMetrics.GET("/system", middleware.RBAC(middleware.RoleViewer), metricsHandler.SystemMetrics)
+				projectMetrics.GET("/system/range", middleware.RBAC(middleware.RoleViewer), metricsHandler.SystemMetricsRange)
 			}
 			projectGroup.POST("/reload", middleware.RBAC(middleware.RoleEditor), syncHandler.ReloadProject)
 		}
