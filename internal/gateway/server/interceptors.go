@@ -104,8 +104,18 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 	apiKeyVals := md.Get("x-api-key")
 
 	if len(authVals) > 0 && strings.HasPrefix(authVals[0], "Bearer ") {
+		if in.authMiddleware == nil ||
+			in.authMiddleware.JWTValidator == nil {
+
+			return AuthInfo{},
+				status.Error(
+					codes.Unauthenticated,
+					"JWT authentication is not configured",
+				)
+		}
+
 		token := strings.TrimPrefix(authVals[0], "Bearer ")
-		claims, err := in.authMiddleware.JWTValidator.Validate(token)
+		identity, err := in.authMiddleware.JWTValidator.Validate(token)
 		if err != nil {
 			// Log internally, never expose err details to caller
 			in.logger.Warn().
@@ -115,11 +125,11 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 			return AuthInfo{}, status.Error(codes.Unauthenticated, "invalid token")
 		}
 		in.logger.Debug().
-			Str("client_id", claims.ClientID).
-			Str("role", claims.Role).
+			Str("client_id", identity.ClientID).
+			Str("role", identity.Role).
 			Str("method", fullMethod).
 			Msg("auth: JWT validated successfully")
-		return AuthInfo{ClientID: claims.ClientID, Role: claims.Role}, nil
+		return AuthInfo{ClientID: identity.ClientID, Role: identity.Role}, nil
 	}
 
 	if len(apiKeyVals) > 0 && in.authMiddleware.KeyStore != nil {

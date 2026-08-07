@@ -62,6 +62,36 @@ resource "aws_iam_policy" "ec2_secrets_policy" {
         ]
       },
       {
+        Sid    = "AllowProjectJWTSecretCreate"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:CreateSecret"
+        ]
+
+        Resource = "*"
+
+        Condition = {
+          StringLike = {
+            "secretsmanager:Name" = "elitegate/production/projects/*/jwt/hs256"
+          }
+        }
+      },
+      {
+        Sid    = "AllowProjectJWTSecretManagement"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:RestoreSecret"
+        ]
+
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:elitegate/production/projects/*"
+        ]
+      },
+      {
         Sid    = "AllowSSMParameterRead"
         Effect = "Allow"
         Action = [

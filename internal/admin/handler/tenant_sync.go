@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"time"
 
@@ -37,6 +38,7 @@ type TenantSnapshotDTO struct {
 	Targets       map[string][]model.UpstreamTarget `json:"targets"`
 	APIKeys       []TenantAPIKeyDTO                 `json:"api_keys"`
 	CustomDomains []model.CustomDomainSync          `json:"custom_domains"`
+	JWTAuth       *model.ProjectJWTConfigSync       `json:"jwt_auth,omitempty"`
 }
 
 type TenantSyncHandler struct {
@@ -45,6 +47,7 @@ type TenantSyncHandler struct {
 	targetRepo       *storage.UpstreamTargetRepo
 	apiKeyRepo       *storage.ApiKeyRepo
 	customDomainRepo *storage.CustomDomainRepo
+	jwtConfigRepo    *storage.ProjectJWTConfigRepo
 	logger           zerolog.Logger
 }
 
@@ -55,6 +58,7 @@ func NewTenantSyncHandler(db *sql.DB, logger zerolog.Logger) *TenantSyncHandler 
 		targetRepo:       storage.NewUpstreamTargetRepo(db, logger),
 		apiKeyRepo:       storage.NewApiKeyRepo(db),
 		customDomainRepo: storage.NewCustomDomainRepo(db, logger),
+		jwtConfigRepo:    storage.NewProjectJWTConfigRepo(db, logger),
 		logger:           logger,
 	}
 }
@@ -130,6 +134,45 @@ func (h *TenantSyncHandler) GetTenantSnapshot(c *gin.Context) {
 		return
 	}
 
+	var jwtAuth *model.ProjectJWTConfigSync
+
+	jwtConfig, err := h.jwtConfigRepo.Get(ctx)
+
+	switch {
+	case err == nil:
+		jwtAuth = &model.ProjectJWTConfigSync{
+			Enabled:          jwtConfig.Enabled,
+			Algorithm:        jwtConfig.Algorithm,
+			ConfigVersion:    jwtConfig.ConfigVersion,
+			Issuer:           jwtConfig.Issuer,
+			Audiences:        jwtConfig.Audiences,
+			SubjectClaim:     jwtConfig.SubjectClaim,
+			RoleClaim:        jwtConfig.RoleClaim,
+			ScopesClaim:      jwtConfig.ScopesClaim,
+			ClockSkewSeconds: jwtConfig.ClockSkewSeconds,
+		}
+
+		if jwtConfig.Enabled {
+			jwtAuth.SecretARN = jwtConfig.SecretARN
+			jwtAuth.SecretVersionID = jwtConfig.SecretVersionID
+		}
+
+	case errors.Is(err, storage.ErrProjectJWTConfigNotFound):
+		// JWT authentication has not been configured.
+		// Leave jwtAuth nil.
+
+	default:
+		log.Error().
+			Err(err).
+			Msg("sync: failed to load project JWT configuration")
+
+		c.JSON(
+			http.StatusInternalServerError,
+			gin.H{"error": "failed to fetch tenant JWT configuration"},
+		)
+		return
+	}
+
 	c.JSON(http.StatusOK, TenantSnapshotDTO{
 		ProjectID:     projectID,
 		Routes:        routes,
@@ -137,5 +180,6 @@ func (h *TenantSyncHandler) GetTenantSnapshot(c *gin.Context) {
 		Targets:       targetsMap,
 		APIKeys:       keyDTOs,
 		CustomDomains: customDomains,
+		JWTAuth:       jwtAuth,
 	})
 }

@@ -18,13 +18,23 @@ type APIKeyStore interface {
 	Validate(key string) (*auth.APIKeyRecord, bool)
 }
 
+type JWTValidator interface {
+	Validate(
+		token string,
+	) (*auth.Identity, error)
+}
+
 type AuthMiddleware struct {
-	JWTValidator *auth.JWTValidator
+	JWTValidator JWTValidator
 	KeyStore     APIKeyStore
 	Logger       *zerolog.Logger
 }
 
-func NewAuthMiddleware(jwtValidator *auth.JWTValidator, keyStore APIKeyStore, logger *zerolog.Logger) *AuthMiddleware {
+func NewAuthMiddleware(
+	jwtValidator JWTValidator,
+	keyStore APIKeyStore,
+	logger *zerolog.Logger,
+) *AuthMiddleware {
 	return &AuthMiddleware{
 		JWTValidator: jwtValidator,
 		KeyStore:     keyStore,
@@ -48,16 +58,47 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		var scopes []string
 
 		if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
-			tokenStr := strings.TrimPrefix(bearer, "Bearer ")
-			claims, err := a.JWTValidator.Validate(tokenStr)
-			if err != nil {
-				httpJSON(w, http.StatusUnauthorized,
-					map[string]string{"error": "invalid token", "detail": err.Error()})
+			if a.JWTValidator == nil {
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "JWT authentication is not configured",
+					},
+				)
 				return
 			}
-			clientID = claims.ClientID
-			role = claims.Role
-			scopes = []string{}
+
+			tokenStr := strings.TrimPrefix(
+				bearer,
+				"Bearer ",
+			)
+
+			identity, err := a.JWTValidator.Validate(
+				tokenStr,
+			)
+			if err != nil {
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Err(err).
+						Str("path", r.URL.Path).
+						Msg("JWT validation failed")
+				}
+
+				// Do NOT expose validation internals.
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "invalid token",
+					},
+				)
+				return
+			}
+
+			clientID = identity.ClientID
+			role = identity.Role
+			scopes = identity.Scopes
 		} else if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" && a.KeyStore != nil {
 			rec, valid := a.KeyStore.Validate(key)
 			if !valid {
