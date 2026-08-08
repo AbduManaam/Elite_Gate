@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -14,7 +15,15 @@ import (
 	"elitegate/internal/domain"
 	"elitegate/internal/gateway/health"
 	"elitegate/internal/gateway/loadbalancer"
+	"elitegate/internal/model"
 )
+
+type JWTConfigApplier interface {
+	Apply(
+		ctx context.Context,
+		cfg *model.ProjectJWTConfigSync,
+	) error
+}
 
 type Loader struct {
 	controlClient *ControlPlaneClient
@@ -23,6 +32,9 @@ type Loader struct {
 	logger        zerolog.Logger
 	interval      time.Duration
 	health        *health.Checker
+
+	jwtConfigApplier JWTConfigApplier
+	reloadMu         sync.Mutex
 
 	mu           sync.RWMutex
 	snapshot     Snapshot
@@ -42,6 +54,12 @@ func NewLoader(controlClient *ControlPlaneClient, rdb *redis.Client, logger zero
 
 func (l *Loader) SetKeyStore(ks *auth.RedisKeyStore) {
 	l.keyStore = ks
+}
+
+func (l *Loader) SetJWTConfigApplier(
+	applier JWTConfigApplier,
+) {
+	l.jwtConfigApplier = applier
 }
 
 func (l *Loader) SetHealthChecker(hc *health.Checker) {
@@ -82,10 +100,34 @@ func (l *Loader) loop(ctx context.Context) {
 // Reloads configuration snapshot from the control plane and
 // atomically swaps the in-memory snapshot, warming up the api key cache in Redis.
 func (l *Loader) reload(ctx context.Context) error {
+	l.reloadMu.Lock()
+	defer l.reloadMu.Unlock()
+
 	snap, err := l.controlClient.FetchSnapshot(ctx)
 	if err != nil {
 		l.logger.Error().Err(err).Msg("failed to fetch configuration snapshot from control plane")
 		return err // keep serving the last good snapshot
+	}
+
+	if l.jwtConfigApplier != nil {
+		if err := l.jwtConfigApplier.Apply(
+			ctx,
+			snap.JWTAuth,
+		); err != nil {
+
+			l.logger.Error().
+				Err(err).
+				Msg(
+					"failed to apply project JWT configuration",
+				)
+
+			// Important:
+			// do not activate the new route snapshot.
+			return fmt.Errorf(
+				"apply project JWT configuration: %w",
+				err,
+			)
+		}
 	}
 
 	pools := l.buildPoolsFromSnapshot(snap)

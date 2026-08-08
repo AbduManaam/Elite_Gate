@@ -12,6 +12,7 @@ import (
 
 	"elitegate/helper"
 	"elitegate/internal/auth"
+	eliteaws "elitegate/internal/aws"
 	"elitegate/internal/config"
 	gatewayRouter "elitegate/internal/gateway"
 	"elitegate/internal/gateway/health"
@@ -91,6 +92,39 @@ func StartApp(cfg *config.Config) (*App, error) {
 	loader.SetHealthChecker(hc)
 	// ─────────────────────────────────────────────────────────────────────
 
+	keyStore := auth.NewRedisKeyStore(
+		rdb,
+		nil,
+	)
+	loader.SetKeyStore(keyStore)
+
+	awsRegion := cfg.AWS.Region
+	if awsRegion == "" {
+		awsRegion = "us-east-1"
+	}
+
+	jwtSecretManager, err := eliteaws.NewAWSSecretManager(
+		context.Background(),
+		awsRegion,
+	)
+	if err != nil {
+		if rdb != nil {
+			_ = rdb.Close()
+		}
+
+		return nil, fmt.Errorf(
+			"initialize project JWT Secrets Manager: %w",
+			err,
+		)
+	}
+
+	jwtManager := runtime.NewProjectJWTManager(
+		jwtSecretManager,
+		logger,
+	)
+
+	loader.SetJWTConfigApplier(jwtManager)
+
 	gatewayCtx := context.Background()
 
 	if err := loader.Start(gatewayCtx); err != nil {
@@ -102,12 +136,11 @@ func StartApp(cfg *config.Config) (*App, error) {
 
 	hc.Start(gatewayCtx) // stops automatically when gatewayCtx is cancelled (shutdown)
 
-	// Injected shared security configurations
-	jwtValidator := auth.NewJWTValidator(cfg.Auth.JWTSecret)
-	// db is gone; RedisKeyStore's cache is kept warm by the loader instead:
-	keyStore := auth.NewRedisKeyStore(rdb, nil)
-	loader.SetKeyStore(keyStore)
-	authMiddleware := middleware.NewAuthMiddleware(jwtValidator, keyStore, &logger)
+	authMiddleware := middleware.NewAuthMiddleware(
+		jwtManager,
+		keyStore,
+		&logger,
+	)
 
 	rpm := cfg.RateLimit.RequestsPerMinute
 	memFallback := ratelimit.NewMemoryLimiter(rpm)

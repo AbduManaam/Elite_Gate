@@ -61,3 +61,21 @@ func (v *JWTValidator) Validate(tokenStr string) (*Claims, error) {
 	}
 	return claims, nil
 }
+
+func (v *JWTValidator) ValidateIdentity(
+	tokenStr string,
+) (*Identity, error) {
+	claims, err := v.Validate(
+		tokenStr,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &Identity{
+		ClientID: claims.ClientID,
+		Role:     claims.Role,
+		Scopes:   []string{},
+	}, nil
+}

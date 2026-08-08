@@ -103,8 +103,66 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   role       = aws_iam_role.ec2.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
+
 resource "aws_iam_role_policy_attachment" "ec2_ecr_read_only" {
   role       = aws_iam_role.ec2.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
+# ---------------------------------------------------------------------------
+# Project JWT Secrets Manager policy
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_policy" "ec2_project_jwt_secrets_policy" {
+  name        = "elitegate-production-project-jwt-secrets-policy"
+  description = "Scoped Secrets Manager access for EliteGate project JWT verification secrets"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "AllowProjectJWTSecretCreate"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:CreateSecret"
+        ]
+
+        Resource = "*"
+
+        Condition = {
+          StringLike = {
+            "secretsmanager:Name" = "elitegate/production/projects/*/jwt/hs256"
+          }
+        }
+      },
+
+      {
+        Sid    = "AllowProjectJWTSecretManagement"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:RestoreSecret"
+        ]
+
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:elitegate/production/projects/*/jwt/hs256-*"
+        ]
+      }
+    ]
+  })
+
+  tags = merge(local.common_tags, {
+    Name = "elitegate-production-project-jwt-secrets-policy"
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_project_jwt_secrets" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = aws_iam_policy.ec2_project_jwt_secrets_policy.arn
+}

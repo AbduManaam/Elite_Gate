@@ -2,15 +2,16 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"time"
+
+	"elitegate/internal/model"
+	"elitegate/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-
-	"elitegate/internal/model"
-	"elitegate/internal/storage"
 )
 
 // TenantAPIKeyDTO carries only what the gateway's RedisKeyStore needs to
@@ -31,12 +32,24 @@ type TenantAPIKeyDTO struct {
 // POSTGRES_DSN is removed from the gateway — the gateway must get keys
 // from here and self-populate its Redis cache instead.
 type TenantSnapshotDTO struct {
-	ProjectID     uuid.UUID                         `json:"project_id"`
-	Routes        []model.Route                     `json:"routes"`
-	Upstreams     []model.Upstream                  `json:"upstreams"`
-	Targets       map[string][]model.UpstreamTarget `json:"targets"`
-	APIKeys       []TenantAPIKeyDTO                 `json:"api_keys"`
-	CustomDomains []model.CustomDomainSync          `json:"custom_domains"`
+	ProjectID uuid.UUID `json:"project_id"`
+
+	Routes []model.Route `json:"routes"`
+
+	Upstreams []model.Upstream `json:"upstreams"`
+
+	Targets map[string][]model.UpstreamTarget `json:"targets"`
+
+	APIKeys []TenantAPIKeyDTO `json:"api_keys"`
+
+	CustomDomains []model.CustomDomainSync `json:"custom_domains"`
+
+	// nil means the project has no JWT authentication configuration.
+	//
+	// An explicitly disabled configuration is represented by a non-nil
+	// object with Enabled=false, allowing the gateway to distinguish
+	// "disabled" from an active configuration.
+	JWTAuth *model.ProjectJWTConfigSync `json:"jwt_auth"`
 }
 
 type TenantSyncHandler struct {
@@ -45,18 +58,108 @@ type TenantSyncHandler struct {
 	targetRepo       *storage.UpstreamTargetRepo
 	apiKeyRepo       *storage.ApiKeyRepo
 	customDomainRepo *storage.CustomDomainRepo
-	logger           zerolog.Logger
+
+	projectJWTConfigRepo *storage.ProjectJWTConfigRepo
+
+	logger zerolog.Logger
 }
 
-func NewTenantSyncHandler(db *sql.DB, logger zerolog.Logger) *TenantSyncHandler {
+func NewTenantSyncHandler(
+	db *sql.DB,
+	logger zerolog.Logger,
+) *TenantSyncHandler {
 	return &TenantSyncHandler{
-		routeRepo:        storage.NewRouteRepo(db, logger),
-		upstreamRepo:     storage.NewUpstreamRepo(db, logger),
-		targetRepo:       storage.NewUpstreamTargetRepo(db, logger),
-		apiKeyRepo:       storage.NewApiKeyRepo(db),
-		customDomainRepo: storage.NewCustomDomainRepo(db, logger),
-		logger:           logger,
+		routeRepo: storage.NewRouteRepo(
+			db,
+			logger,
+		),
+
+		upstreamRepo: storage.NewUpstreamRepo(
+			db,
+			logger,
+		),
+
+		targetRepo: storage.NewUpstreamTargetRepo(
+			db,
+			logger,
+		),
+
+		apiKeyRepo: storage.NewApiKeyRepo(
+			db,
+		),
+
+		customDomainRepo: storage.NewCustomDomainRepo(
+			db,
+			logger,
+		),
+
+		projectJWTConfigRepo: storage.NewProjectJWTConfigRepo(
+			db,
+			logger,
+		),
+
+		logger: logger,
 	}
+}
+
+func projectJWTConfigToSync(
+	cfg *model.ProjectJWTConfig,
+) (*model.ProjectJWTConfigSync, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+
+	audiences := append(
+		[]string(nil),
+		cfg.Audiences...,
+	)
+
+	if audiences == nil {
+		audiences = []string{}
+	}
+
+	result := &model.ProjectJWTConfigSync{
+		Enabled: cfg.Enabled,
+
+		Algorithm: cfg.Algorithm,
+
+		ConfigVersion: cfg.ConfigVersion,
+
+		Issuer: cfg.Issuer,
+
+		Audiences: audiences,
+
+		SubjectClaim: cfg.SubjectClaim,
+		RoleClaim:    cfg.RoleClaim,
+		ScopesClaim:  cfg.ScopesClaim,
+
+		ClockSkewSeconds: cfg.ClockSkewSeconds,
+	}
+
+	// Do not expose infrastructure references when JWT authentication
+	// is disabled. The gateway does not need them.
+	if !cfg.Enabled {
+		return result, nil
+	}
+
+	// Defense in depth. The database already requires these values, but
+	// the sync layer refuses to publish an unusable active configuration.
+	if cfg.SecretARN == "" {
+		return nil, errors.New(
+			"enabled JWT configuration is missing secret ARN",
+		)
+	}
+
+	if cfg.SecretVersionID == "" {
+		return nil, errors.New(
+			"enabled JWT configuration is missing secret version",
+		)
+	}
+
+	result.SecretARN = cfg.SecretARN
+	result.SecretVersionID = cfg.SecretVersionID
+
+	return result, nil
 }
 
 // GetTenantSnapshot is registered behind middleware.RequireGatewayToken,
@@ -130,6 +233,42 @@ func (h *TenantSyncHandler) GetTenantSnapshot(c *gin.Context) {
 		return
 	}
 
+	var jwtAuth *model.ProjectJWTConfigSync
+
+	jwtConfig, err := h.projectJWTConfigRepo.Get(ctx)
+
+	switch {
+	case err == nil:
+		syncObj, syncErr := projectJWTConfigToSync(jwtConfig)
+		if syncErr != nil {
+			log.Error().
+				Err(syncErr).
+				Msg("sync: invalid project JWT configuration state")
+
+			c.JSON(
+				http.StatusInternalServerError,
+				gin.H{"error": "invalid project JWT configuration"},
+			)
+			return
+		}
+		jwtAuth = syncObj
+
+	case errors.Is(err, storage.ErrProjectJWTConfigNotFound):
+		// JWT authentication has not been configured.
+		// Leave jwtAuth nil.
+
+	default:
+		log.Error().
+			Err(err).
+			Msg("sync: failed to load project JWT configuration")
+
+		c.JSON(
+			http.StatusInternalServerError,
+			gin.H{"error": "failed to fetch tenant JWT configuration"},
+		)
+		return
+	}
+
 	c.JSON(http.StatusOK, TenantSnapshotDTO{
 		ProjectID:     projectID,
 		Routes:        routes,
@@ -137,5 +276,6 @@ func (h *TenantSyncHandler) GetTenantSnapshot(c *gin.Context) {
 		Targets:       targetsMap,
 		APIKeys:       keyDTOs,
 		CustomDomains: customDomains,
+		JWTAuth:       jwtAuth,
 	})
 }

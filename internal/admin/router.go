@@ -13,6 +13,7 @@ import (
 	"elitegate/internal/admin/middleware"
 	"elitegate/internal/admin/service"
 	"elitegate/internal/auth"
+	eliteaws "elitegate/internal/aws"
 	"elitegate/internal/config"
 	"elitegate/internal/container"
 	"elitegate/internal/ipfilter"
@@ -125,6 +126,33 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	auditLogRepo := storage.NewAuditLogRepo(db, logger)
 	gatewayRepo := storage.NewGatewayRepo(db)
 	customDomainRepo := storage.NewCustomDomainRepo(db, logger)
+	projectJWTConfigRepo := storage.NewProjectJWTConfigRepo(
+		db,
+		logger,
+	)
+
+	awsRegion := cfg.AWS.Region
+	if awsRegion == "" {
+		awsRegion = "us-east-1"
+	}
+
+	jwtSecretManager, err := eliteaws.NewAWSSecretManager(
+		context.Background(),
+		awsRegion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"initialize project JWT Secrets Manager: %w",
+			err,
+		)
+	}
+
+	projectJWTConfigSvc := service.NewProjectJWTConfigService(
+		projectJWTConfigRepo,
+		jwtSecretManager,
+		cfg.AppEnv,
+		logger,
+	)
 
 	// Services initialized
 	auditSvc := service.NewAuditService(auditLogRepo, logger)
@@ -157,6 +185,11 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 
 	customDomainHandler := handler.NewCustomDomainHandler(
 		customDomainSvc,
+		logger,
+		auditSvc,
+	)
+	projectJWTConfigHandler := handler.NewProjectJWTConfigHandler(
+		projectJWTConfigSvc,
 		logger,
 		auditSvc,
 	)
@@ -329,6 +362,28 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				keys.POST("/:id/rotate", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Rotate)
 				keys.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Revoke)
 			}
+
+			security := projectGroup.Group("/security")
+			{
+				security.GET(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Get,
+				)
+
+				security.PUT(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Configure,
+				)
+
+				security.DELETE(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Delete,
+				)
+			}
+
 			customDomains := projectGroup.Group("/custom-domains")
 			{
 				customDomains.GET(

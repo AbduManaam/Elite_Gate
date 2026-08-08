@@ -34,10 +34,11 @@ func TestTenantSyncHandler_GetTenantSnapshot_CustomDomains(t *testing.T) {
 	}
 
 	var response struct {
-		ProjectID     uuid.UUID                `json:"project_id"`
-		Routes        []model.Route            `json:"routes"`
-		Upstreams     []model.Upstream         `json:"upstreams"`
-		CustomDomains []model.CustomDomainSync `json:"custom_domains"`
+		ProjectID     uuid.UUID                   `json:"project_id"`
+		Routes        []model.Route               `json:"routes"`
+		Upstreams     []model.Upstream            `json:"upstreams"`
+		CustomDomains []model.CustomDomainSync    `json:"custom_domains"`
+		JWTAuth       *model.ProjectJWTConfigSync `json:"jwt_auth"`
 	}
 
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -52,9 +53,17 @@ func TestTenantSyncHandler_GetTenantSnapshot_CustomDomains(t *testing.T) {
 		t.Errorf("expected custom_domains to be non-nil empty array []")
 	}
 
+	if response.JWTAuth != nil {
+		t.Errorf("expected jwt_auth to be nil when JWT authentication is not configured")
+	}
+
 	rawJSON := w.Body.String()
 	if !containsSubstring(rawJSON, `"custom_domains":[]`) && !containsSubstring(rawJSON, `"custom_domains": []`) {
 		t.Errorf("expected JSON to contain 'custom_domains': [], got: %s", rawJSON)
+	}
+
+	if !containsSubstring(rawJSON, `"jwt_auth":null`) && !containsSubstring(rawJSON, `"jwt_auth": null`) {
+		t.Errorf("expected JSON to contain jwt_auth:null, got: %s", rawJSON)
 	}
 }
 

@@ -18,13 +18,23 @@ type APIKeyStore interface {
 	Validate(key string) (*auth.APIKeyRecord, bool)
 }
 
+type JWTIdentityValidator interface {
+	ValidateIdentity(
+		token string,
+	) (*auth.Identity, error)
+}
+
 type AuthMiddleware struct {
-	JWTValidator *auth.JWTValidator
+	JWTValidator JWTIdentityValidator
 	KeyStore     APIKeyStore
 	Logger       *zerolog.Logger
 }
 
-func NewAuthMiddleware(jwtValidator *auth.JWTValidator, keyStore APIKeyStore, logger *zerolog.Logger) *AuthMiddleware {
+func NewAuthMiddleware(
+	jwtValidator JWTIdentityValidator,
+	keyStore APIKeyStore,
+	logger *zerolog.Logger,
+) *AuthMiddleware {
 	return &AuthMiddleware{
 		JWTValidator: jwtValidator,
 		KeyStore:     keyStore,
@@ -47,17 +57,83 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		var clientID, role string
 		var scopes []string
 
-		if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
-			tokenStr := strings.TrimPrefix(bearer, "Bearer ")
-			claims, err := a.JWTValidator.Validate(tokenStr)
-			if err != nil {
-				httpJSON(w, http.StatusUnauthorized,
-					map[string]string{"error": "invalid token", "detail": err.Error()})
+		if bearer :=
+			r.Header.Get("Authorization"); strings.HasPrefix(
+			bearer,
+			"Bearer ",
+		) {
+
+			if a.JWTValidator == nil {
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "JWT authentication is not configured",
+					},
+				)
 				return
 			}
-			clientID = claims.ClientID
-			role = claims.Role
-			scopes = []string{}
+
+			tokenStr :=
+				strings.TrimSpace(
+					strings.TrimPrefix(
+						bearer,
+						"Bearer ",
+					),
+				)
+
+			if tokenStr == "" {
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "invalid token",
+					},
+				)
+				return
+			}
+
+			identity, err :=
+				a.JWTValidator.ValidateIdentity(
+					tokenStr,
+				)
+
+			if err != nil {
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Err(err).
+						Str(
+							"path",
+							r.URL.Path,
+						).
+						Msg(
+							"JWT validation failed",
+						)
+				}
+
+				// Never return internal JWT validation details.
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "invalid token",
+					},
+				)
+
+				return
+			}
+
+			clientID =
+				identity.ClientID
+
+			role =
+				identity.Role
+
+			scopes =
+				append(
+					[]string(nil),
+					identity.Scopes...,
+				)
 		} else if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" && a.KeyStore != nil {
 			rec, valid := a.KeyStore.Validate(key)
 			if !valid {
@@ -78,23 +154,27 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		if rt != nil {
 			// Role check: if the route restricts roles, client must have one of them
 			if len(rt.AllowedRoles) > 0 && !helper.Contains(rt.AllowedRoles, role) {
-				a.Logger.Warn().
-					Str("path", r.URL.Path).
-					Str("client_id", clientID).
-					Str("client_role", role).
-					Strs("allowed_roles", rt.AllowedRoles).
-					Msg("authz: role not permitted")
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Str("path", r.URL.Path).
+						Str("client_id", clientID).
+						Str("client_role", role).
+						Strs("allowed_roles", rt.AllowedRoles).
+						Msg("authz: role not permitted")
+				}
 				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: role not permitted"})
 				return
 			}
 			// Scope check: client must have ALL required scopes
 			if len(rt.AllowedScopes) > 0 && !helper.HasAllScopes(scopes, rt.AllowedScopes) {
-				a.Logger.Warn().
-					Str("path", r.URL.Path).
-					Str("client_id", clientID).
-					Strs("client_scopes", scopes).
-					Strs("required_scopes", rt.AllowedScopes).
-					Msg("authz: missing required scopes")
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Str("path", r.URL.Path).
+						Str("client_id", clientID).
+						Strs("client_scopes", scopes).
+						Strs("required_scopes", rt.AllowedScopes).
+						Msg("authz: missing required scopes")
+				}
 				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: insufficient scopes"})
 				return
 			}
