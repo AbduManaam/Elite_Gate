@@ -412,7 +412,7 @@ func configFromInput(
 		Enabled:          input.Enabled,
 		Algorithm:        input.Algorithm,
 		Issuer:           input.Issuer,
-		Audiences:        append([]string(nil), input.Audiences...),
+		Audiences:        append([]string{}, input.Audiences...),
 		SubjectClaim:     input.SubjectClaim,
 		RoleClaim:        input.RoleClaim,
 		ScopesClaim:      input.ScopesClaim,
