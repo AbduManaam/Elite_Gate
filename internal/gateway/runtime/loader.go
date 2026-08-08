@@ -114,6 +114,15 @@ func (l *Loader) reload(ctx context.Context) error {
 			ctx,
 			snap.JWTAuth,
 		); err != nil {
+
+			l.logger.Error().
+				Err(err).
+				Msg(
+					"failed to apply project JWT configuration",
+				)
+
+			// Important:
+			// do not activate the new route snapshot.
 			return fmt.Errorf(
 				"apply project JWT configuration: %w",
 				err,

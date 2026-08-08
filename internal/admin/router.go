@@ -362,6 +362,28 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 				keys.POST("/:id/rotate", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Rotate)
 				keys.DELETE("/:id", middleware.RBAC(middleware.RoleEditor), apiKeyHandler.Revoke)
 			}
+
+			security := projectGroup.Group("/security")
+			{
+				security.GET(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Get,
+				)
+
+				security.PUT(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Configure,
+				)
+
+				security.DELETE(
+					"/jwt",
+					middleware.RBAC(middleware.RoleOwner),
+					projectJWTConfigHandler.Delete,
+				)
+			}
+
 			customDomains := projectGroup.Group("/custom-domains")
 			{
 				customDomains.GET(
@@ -422,27 +444,6 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 					"/:domainId/retry-deprovisioning",
 					middleware.RBAC(middleware.RoleOwner),
 					customDomainHandler.RetryDeprovisioning,
-				)
-			}
-
-			security := projectGroup.Group("/security")
-			{
-				security.GET(
-					"/jwt",
-					middleware.RBAC(middleware.RoleOwner),
-					projectJWTConfigHandler.Get,
-				)
-
-				security.PUT(
-					"/jwt",
-					middleware.RBAC(middleware.RoleOwner),
-					projectJWTConfigHandler.Configure,
-				)
-
-				security.DELETE(
-					"/jwt",
-					middleware.RBAC(middleware.RoleOwner),
-					projectJWTConfigHandler.Delete,
 				)
 			}
 			auditLogs := projectGroup.Group("/audit-logs")

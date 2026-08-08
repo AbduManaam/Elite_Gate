@@ -20,7 +20,7 @@ type TenantSnapshot struct {
 	Targets       map[string][]model.UpstreamTarget `json:"targets"`
 	APIKeys       []TenantAPIKeyDTO                 `json:"api_keys"`
 	CustomDomains []model.CustomDomainSync          `json:"custom_domains"`
-	JWTAuth       *model.ProjectJWTConfigSync       `json:"jwt_auth,omitempty"`
+	JWTAuth       *model.ProjectJWTConfigSync       `json:"jwt_auth"`
 }
 
 type TenantAPIKeyDTO struct {

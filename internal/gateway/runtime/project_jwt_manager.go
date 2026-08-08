@@ -9,37 +9,67 @@ import (
 	"time"
 
 	"elitegate/internal/auth"
-	eliteaws "elitegate/internal/aws"
 	"elitegate/internal/model"
 
 	"github.com/rs/zerolog"
 )
 
+// ProjectJWTSecretReader contains only the Secrets Manager operation the
+// gateway runtime actually needs.
+//
+// This keeps the runtime independent from create/update/delete operations.
+type ProjectJWTSecretReader interface {
+	GetSecret(
+		ctx context.Context,
+		secretID string,
+		versionID string,
+	) (string, error)
+}
+
+// projectJWTState is immutable once stored.
+//
+// Requests read this structure through atomic.Pointer, so there is no
+// per-request mutex.
+type projectJWTState struct {
+	enabled bool
+
+	configVersion int64
+
+	secretARN       string
+	secretVersionID string
+
+	verifier *auth.ProjectJWTVerifier
+}
+
 type ProjectJWTManager struct {
-	secrets eliteaws.SecretManager
+	secrets ProjectJWTSecretReader
 	logger  zerolog.Logger
 
+	// Configuration reloads are serialized.
 	applyMu sync.Mutex
 
-	verifier atomic.Pointer[auth.ProjectJWTVerifier]
-
-	configVersion   int64
-	secretVersionID string
-	enabled         bool
+	// Request path uses only this atomic pointer.
+	state atomic.Pointer[projectJWTState]
 }
 
 func NewProjectJWTManager(
-	secrets eliteaws.SecretManager,
+	secrets ProjectJWTSecretReader,
 	logger zerolog.Logger,
 ) *ProjectJWTManager {
 	return &ProjectJWTManager{
 		secrets: secrets,
 		logger: logger.With().
-			Str("component", "project_jwt_manager").
+			Str(
+				"component",
+				"project_jwt_manager",
+			).
 			Logger(),
 	}
 }
 
+// Apply installs a new JWT configuration.
+//
+// AWS is called only when the underlying secret ARN/version changes.
 func (m *ProjectJWTManager) Apply(
 	ctx context.Context,
 	cfg *model.ProjectJWTConfigSync,
@@ -47,71 +77,131 @@ func (m *ProjectJWTManager) Apply(
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
 
+	current := m.state.Load()
+
+	// No JWT config or explicitly disabled.
 	if cfg == nil || !cfg.Enabled {
-		m.verifier.Store(nil)
-		m.enabled = false
+		version := int64(0)
 
 		if cfg != nil {
-			m.configVersion = cfg.ConfigVersion
-		} else {
-			m.configVersion = 0
+			version = cfg.ConfigVersion
 		}
 
-		m.secretVersionID = ""
+		m.state.Store(
+			&projectJWTState{
+				enabled:       false,
+				configVersion: version,
+			},
+		)
 
 		return nil
 	}
 
-	if m.enabled &&
-		m.configVersion == cfg.ConfigVersion &&
-		m.secretVersionID == cfg.SecretVersionID {
+	if cfg.SecretARN == "" {
+		return errors.New(
+			"enabled project JWT configuration has no secret ARN",
+		)
+	}
 
-		// Most reloads come through here.
-		// No AWS call.
+	if cfg.SecretVersionID == "" {
+		return errors.New(
+			"enabled project JWT configuration has no secret version",
+		)
+	}
+
+	// Exact same configuration already active.
+	if current != nil &&
+		current.enabled &&
+		current.configVersion == cfg.ConfigVersion &&
+		current.secretARN == cfg.SecretARN &&
+		current.secretVersionID == cfg.SecretVersionID &&
+		current.verifier != nil {
+
+		return nil
+	}
+
+	verifierConfig :=
+		projectJWTVerifierConfig(cfg)
+
+	// Non-secret settings changed but the AWS secret did not.
+	//
+	// Example:
+	// audience v1 -> audience v2
+	//
+	// Rebuild locally from the existing verifier.
+	// NO AWS request.
+	if current != nil &&
+		current.enabled &&
+		current.verifier != nil &&
+		current.secretARN == cfg.SecretARN &&
+		current.secretVersionID == cfg.SecretVersionID {
+
+		verifier, err :=
+			current.verifier.Reconfigure(
+				verifierConfig,
+			)
+
+		if err != nil {
+			return fmt.Errorf(
+				"reconfigure project JWT verifier: %w",
+				err,
+			)
+		}
+
+		m.state.Store(
+			&projectJWTState{
+				enabled: true,
+
+				configVersion: cfg.ConfigVersion,
+
+				secretARN: cfg.SecretARN,
+
+				secretVersionID: cfg.SecretVersionID,
+
+				verifier: verifier,
+			},
+		)
+
+		m.logger.Info().
+			Int64(
+				"config_version",
+				cfg.ConfigVersion,
+			).
+			Msg(
+				"project JWT verifier reconfigured without secret reload",
+			)
+
 		return nil
 	}
 
 	if m.secrets == nil {
 		return errors.New(
-			"Secrets Manager is not initialized",
+			"project JWT Secrets Manager reader is not initialized",
 		)
 	}
 
-	if cfg.SecretARN == "" ||
-		cfg.SecretVersionID == "" {
-		return errors.New(
-			"enabled JWT configuration has no secret reference",
-		)
-	}
-
+	// First load or actual secret rotation.
 	secret, err := m.secrets.GetSecret(
 		ctx,
 		cfg.SecretARN,
 		cfg.SecretVersionID,
 	)
+
 	if err != nil {
 		return fmt.Errorf(
-			"load project JWT secret: %w",
+			"load project JWT verification secret: %w",
 			err,
 		)
 	}
 
-	verifier, err := auth.NewProjectJWTVerifier(
-		secret,
-		auth.ProjectJWTVerifierConfig{
-			Algorithm:    cfg.Algorithm,
-			Issuer:       cfg.Issuer,
-			Audiences:    cfg.Audiences,
-			SubjectClaim: cfg.SubjectClaim,
-			RoleClaim:    cfg.RoleClaim,
-			ScopesClaim:  cfg.ScopesClaim,
-			ClockSkew: time.Duration(
-				cfg.ClockSkewSeconds,
-			) * time.Second,
-		},
-	)
+	verifier, err :=
+		auth.NewProjectJWTVerifier(
+			secret,
+			verifierConfig,
+		)
 
-	// Do not retain the temporary string any longer than needed.
+	// Best effort: release our temporary reference.
+	// The verifier keeps its own copy.
 	secret = ""
 
 	if err != nil {
@@ -121,33 +211,85 @@ func (m *ProjectJWTManager) Apply(
 		)
 	}
 
-	m.verifier.Store(verifier)
+	// Only publish the state after every operation succeeded.
+	//
+	// Failed refresh therefore leaves the previous verifier active.
+	m.state.Store(
+		&projectJWTState{
+			enabled: true,
 
-	m.configVersion = cfg.ConfigVersion
-	m.secretVersionID = cfg.SecretVersionID
-	m.enabled = true
+			configVersion: cfg.ConfigVersion,
+
+			secretARN: cfg.SecretARN,
+
+			secretVersionID: cfg.SecretVersionID,
+
+			verifier: verifier,
+		},
+	)
 
 	m.logger.Info().
 		Int64(
 			"config_version",
 			cfg.ConfigVersion,
 		).
-		Msg("project JWT verifier reloaded")
+		Str(
+			"algorithm",
+			cfg.Algorithm,
+		).
+		Msg(
+			"project JWT verifier activated",
+		)
 
 	return nil
 }
 
-func (m *ProjectJWTManager) Validate(
+// ValidateIdentity is the hot request path.
+//
+// No lock.
+// No database.
+// No Redis.
+// No Admin API.
+// No AWS.
+func (m *ProjectJWTManager) ValidateIdentity(
 	token string,
 ) (*auth.Identity, error) {
-	verifier := m.verifier.Load()
+	state := m.state.Load()
 
-	if verifier == nil {
-		return nil, auth.ErrProjectJWTNotConfigured
+	if state == nil ||
+		!state.enabled ||
+		state.verifier == nil {
+
+		return nil,
+			auth.ErrProjectJWTNotConfigured
 	}
 
-	// Hot request path:
-	// atomic pointer read + local HMAC verification.
-	// No Redis, PostgreSQL or AWS request.
-	return verifier.Validate(token)
+	return state.verifier.ValidateIdentity(
+		token,
+	)
+}
+
+func projectJWTVerifierConfig(
+	cfg *model.ProjectJWTConfigSync,
+) auth.ProjectJWTVerifierConfig {
+	return auth.ProjectJWTVerifierConfig{
+		Algorithm: cfg.Algorithm,
+
+		Issuer: cfg.Issuer,
+
+		Audiences: append(
+			[]string(nil),
+			cfg.Audiences...,
+		),
+
+		SubjectClaim: cfg.SubjectClaim,
+
+		RoleClaim: cfg.RoleClaim,
+
+		ScopesClaim: cfg.ScopesClaim,
+
+		ClockSkew: time.Duration(
+			cfg.ClockSkewSeconds,
+		) * time.Second,
+	}
 }

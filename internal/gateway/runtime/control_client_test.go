@@ -42,6 +42,18 @@ func TestControlPlaneClient(t *testing.T) {
 			CustomDomains: []model.CustomDomainSync{
 				{Hostname: "test-api.elitegateway.site", Status: "verified", RoutingStatus: "ready"},
 			},
+			JWTAuth: &model.ProjectJWTConfigSync{
+				Enabled:          true,
+				Algorithm:        model.JWTAlgorithmHS256,
+				SecretARN:        "arn:aws:secretsmanager:ap-south-1:123456789012:secret:project-a",
+				SecretVersionID:  "version-3",
+				ConfigVersion:    3,
+				Audiences:        []string{"yumzy-api"},
+				SubjectClaim:     "sub",
+				RoleClaim:        "role",
+				ScopesClaim:      "scope",
+				ClockSkewSeconds: 30,
+			},
 		}
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +90,24 @@ func TestControlPlaneClient(t *testing.T) {
 		}
 		if len(snapshot.CustomDomains) != 1 || snapshot.CustomDomains[0].Hostname != "test-api.elitegateway.site" {
 			t.Errorf("unexpected CustomDomains fetched")
+		}
+		if snapshot.JWTAuth == nil {
+			t.Fatal("expected JWT configuration in snapshot")
+		}
+		if !snapshot.JWTAuth.Enabled {
+			t.Error("expected JWT authentication to be enabled")
+		}
+		if snapshot.JWTAuth.Algorithm != model.JWTAlgorithmHS256 {
+			t.Errorf("unexpected JWT algorithm: %s", snapshot.JWTAuth.Algorithm)
+		}
+		if snapshot.JWTAuth.SecretVersionID != "version-3" {
+			t.Errorf("unexpected JWT secret version: %s", snapshot.JWTAuth.SecretVersionID)
+		}
+		if snapshot.JWTAuth.ConfigVersion != 3 {
+			t.Errorf("expected config version 3, got %d", snapshot.JWTAuth.ConfigVersion)
+		}
+		if len(snapshot.JWTAuth.Audiences) != 1 || snapshot.JWTAuth.Audiences[0] != "yumzy-api" {
+			t.Errorf("unexpected JWT audiences: %v", snapshot.JWTAuth.Audiences)
 		}
 	})
 

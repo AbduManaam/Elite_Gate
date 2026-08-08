@@ -18,20 +18,20 @@ type APIKeyStore interface {
 	Validate(key string) (*auth.APIKeyRecord, bool)
 }
 
-type JWTValidator interface {
-	Validate(
+type JWTIdentityValidator interface {
+	ValidateIdentity(
 		token string,
 	) (*auth.Identity, error)
 }
 
 type AuthMiddleware struct {
-	JWTValidator JWTValidator
+	JWTValidator JWTIdentityValidator
 	KeyStore     APIKeyStore
 	Logger       *zerolog.Logger
 }
 
 func NewAuthMiddleware(
-	jwtValidator JWTValidator,
+	jwtValidator JWTIdentityValidator,
 	keyStore APIKeyStore,
 	logger *zerolog.Logger,
 ) *AuthMiddleware {
@@ -57,7 +57,12 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		var clientID, role string
 		var scopes []string
 
-		if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
+		if bearer :=
+			r.Header.Get("Authorization"); strings.HasPrefix(
+			bearer,
+			"Bearer ",
+		) {
+
 			if a.JWTValidator == nil {
 				httpJSON(
 					w,
@@ -69,23 +74,15 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 				return
 			}
 
-			tokenStr := strings.TrimPrefix(
-				bearer,
-				"Bearer ",
-			)
+			tokenStr :=
+				strings.TrimSpace(
+					strings.TrimPrefix(
+						bearer,
+						"Bearer ",
+					),
+				)
 
-			identity, err := a.JWTValidator.Validate(
-				tokenStr,
-			)
-			if err != nil {
-				if a.Logger != nil {
-					a.Logger.Warn().
-						Err(err).
-						Str("path", r.URL.Path).
-						Msg("JWT validation failed")
-				}
-
-				// Do NOT expose validation internals.
+			if tokenStr == "" {
 				httpJSON(
 					w,
 					http.StatusUnauthorized,
@@ -96,9 +93,47 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 				return
 			}
 
-			clientID = identity.ClientID
-			role = identity.Role
-			scopes = identity.Scopes
+			identity, err :=
+				a.JWTValidator.ValidateIdentity(
+					tokenStr,
+				)
+
+			if err != nil {
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Err(err).
+						Str(
+							"path",
+							r.URL.Path,
+						).
+						Msg(
+							"JWT validation failed",
+						)
+				}
+
+				// Never return internal JWT validation details.
+				httpJSON(
+					w,
+					http.StatusUnauthorized,
+					map[string]string{
+						"error": "invalid token",
+					},
+				)
+
+				return
+			}
+
+			clientID =
+				identity.ClientID
+
+			role =
+				identity.Role
+
+			scopes =
+				append(
+					[]string(nil),
+					identity.Scopes...,
+				)
 		} else if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" && a.KeyStore != nil {
 			rec, valid := a.KeyStore.Validate(key)
 			if !valid {
@@ -119,23 +154,27 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		if rt != nil {
 			// Role check: if the route restricts roles, client must have one of them
 			if len(rt.AllowedRoles) > 0 && !helper.Contains(rt.AllowedRoles, role) {
-				a.Logger.Warn().
-					Str("path", r.URL.Path).
-					Str("client_id", clientID).
-					Str("client_role", role).
-					Strs("allowed_roles", rt.AllowedRoles).
-					Msg("authz: role not permitted")
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Str("path", r.URL.Path).
+						Str("client_id", clientID).
+						Str("client_role", role).
+						Strs("allowed_roles", rt.AllowedRoles).
+						Msg("authz: role not permitted")
+				}
 				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: role not permitted"})
 				return
 			}
 			// Scope check: client must have ALL required scopes
 			if len(rt.AllowedScopes) > 0 && !helper.HasAllScopes(scopes, rt.AllowedScopes) {
-				a.Logger.Warn().
-					Str("path", r.URL.Path).
-					Str("client_id", clientID).
-					Strs("client_scopes", scopes).
-					Strs("required_scopes", rt.AllowedScopes).
-					Msg("authz: missing required scopes")
+				if a.Logger != nil {
+					a.Logger.Warn().
+						Str("path", r.URL.Path).
+						Str("client_id", clientID).
+						Strs("client_scopes", scopes).
+						Strs("required_scopes", rt.AllowedScopes).
+						Msg("authz: missing required scopes")
+				}
 				httpJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: insufficient scopes"})
 				return
 			}

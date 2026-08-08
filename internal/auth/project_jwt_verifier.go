@@ -13,12 +13,6 @@ var ErrProjectJWTNotConfigured = errors.New(
 	"project JWT authentication is not configured",
 )
 
-type Identity struct {
-	ClientID string
-	Role     string
-	Scopes   []string
-}
-
 type ProjectJWTVerifierConfig struct {
 	Algorithm string
 
@@ -72,6 +66,18 @@ func NewProjectJWTVerifier(
 	}, nil
 }
 
+func (v *ProjectJWTVerifier) Reconfigure(
+	cfg ProjectJWTVerifierConfig,
+) (*ProjectJWTVerifier, error) {
+	return NewProjectJWTVerifier(string(v.secret), cfg)
+}
+
+func (v *ProjectJWTVerifier) ValidateIdentity(
+	tokenString string,
+) (*Identity, error) {
+	return v.Validate(tokenString)
+}
+
 func (v *ProjectJWTVerifier) Validate(
 	tokenString string,
 ) (*Identity, error) {
@@ -110,6 +116,7 @@ func (v *ProjectJWTVerifier) Validate(
 			[]string{v.config.Algorithm},
 		),
 		jwt.WithLeeway(v.config.ClockSkew),
+		jwt.WithExpirationRequired(),
 	)
 
 	if err != nil {

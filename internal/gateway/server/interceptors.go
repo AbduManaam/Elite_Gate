@@ -2,14 +2,16 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"strings"
+
+	"elitegate/helper"
 	"elitegate/internal/gateway/middleware"
 	"elitegate/internal/gateway/runtime"
 	"elitegate/internal/ipfilter"
 	"elitegate/internal/model"
 	"elitegate/internal/ratelimit"
 	"elitegate/internal/shared"
-	"fmt"
-	"strings"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
@@ -22,6 +24,7 @@ import (
 type AuthInfo struct {
 	ClientID string
 	Role     string
+	Scopes   []string
 }
 
 type GRPCSecurityInterceptors struct {
@@ -103,7 +106,12 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 	authVals := md.Get("authorization")
 	apiKeyVals := md.Get("x-api-key")
 
-	if len(authVals) > 0 && strings.HasPrefix(authVals[0], "Bearer ") {
+	if len(authVals) > 0 &&
+		strings.HasPrefix(
+			authVals[0],
+			"Bearer ",
+		) {
+
 		if in.authMiddleware == nil ||
 			in.authMiddleware.JWTValidator == nil {
 
@@ -114,22 +122,78 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 				)
 		}
 
-		token := strings.TrimPrefix(authVals[0], "Bearer ")
-		identity, err := in.authMiddleware.JWTValidator.Validate(token)
+		token :=
+			strings.TrimSpace(
+				strings.TrimPrefix(
+					authVals[0],
+					"Bearer ",
+				),
+			)
+
+		if token == "" {
+			return AuthInfo{},
+				status.Error(
+					codes.Unauthenticated,
+					"invalid token",
+				)
+		}
+
+		identity, err :=
+			in.authMiddleware.
+				JWTValidator.
+				ValidateIdentity(
+					token,
+				)
+
 		if err != nil {
-			// Log internally, never expose err details to caller
 			in.logger.Warn().
 				Err(err).
-				Str("method", fullMethod).
-				Msg("auth: JWT validation failed")
-			return AuthInfo{}, status.Error(codes.Unauthenticated, "invalid token")
+				Str(
+					"method",
+					fullMethod,
+				).
+				Msg(
+					"auth: JWT validation failed",
+				)
+
+			return AuthInfo{},
+				status.Error(
+					codes.Unauthenticated,
+					"invalid token",
+				)
 		}
+
 		in.logger.Debug().
-			Str("client_id", identity.ClientID).
-			Str("role", identity.Role).
-			Str("method", fullMethod).
-			Msg("auth: JWT validated successfully")
-		return AuthInfo{ClientID: identity.ClientID, Role: identity.Role}, nil
+			Str(
+				"client_id",
+				identity.ClientID,
+			).
+			Str(
+				"role",
+				identity.Role,
+			).
+			Strs(
+				"scopes",
+				identity.Scopes,
+			).
+			Str(
+				"method",
+				fullMethod,
+			).
+			Msg(
+				"auth: JWT validated successfully",
+			)
+
+		return AuthInfo{
+			ClientID: identity.ClientID,
+
+			Role: identity.Role,
+
+			Scopes: append(
+				[]string(nil),
+				identity.Scopes...,
+			),
+		}, nil
 	}
 
 	if len(apiKeyVals) > 0 && in.authMiddleware.KeyStore != nil {
@@ -144,7 +208,16 @@ func (in *GRPCSecurityInterceptors) resolveAuth(ctx context.Context, fullMethod 
 			Str("client_id", rec.ClientID).
 			Str("method", fullMethod).
 			Msg("auth: API key validated successfully")
-		return AuthInfo{ClientID: rec.ClientID, Role: "client"}, nil
+		return AuthInfo{
+			ClientID: rec.ClientID,
+
+			Role: "client",
+
+			Scopes: append(
+				[]string(nil),
+				rec.Scopes...,
+			),
+		}, nil
 	}
 
 	in.logger.Warn().
@@ -183,6 +256,74 @@ func (in *GRPCSecurityInterceptors) validate(ctx context.Context, fullMethod str
 		authInfo, err = in.resolveAuth(ctx, fullMethod)
 		if err != nil {
 			return nil, err
+		}
+
+		if len(rt.AllowedRoles) > 0 &&
+			!helper.Contains(
+				rt.AllowedRoles,
+				authInfo.Role,
+			) {
+
+			in.logger.Warn().
+				Str(
+					"method",
+					fullMethod,
+				).
+				Str(
+					"client_id",
+					authInfo.ClientID,
+				).
+				Str(
+					"client_role",
+					authInfo.Role,
+				).
+				Strs(
+					"allowed_roles",
+					rt.AllowedRoles,
+				).
+				Msg(
+					"authz: gRPC role not permitted",
+				)
+
+			return nil,
+				status.Error(
+					codes.PermissionDenied,
+					"role not permitted",
+				)
+		}
+
+		if len(rt.AllowedScopes) > 0 &&
+			!helper.HasAllScopes(
+				authInfo.Scopes,
+				rt.AllowedScopes,
+			) {
+
+			in.logger.Warn().
+				Str(
+					"method",
+					fullMethod,
+				).
+				Str(
+					"client_id",
+					authInfo.ClientID,
+				).
+				Strs(
+					"client_scopes",
+					authInfo.Scopes,
+				).
+				Strs(
+					"required_scopes",
+					rt.AllowedScopes,
+				).
+				Msg(
+					"authz: gRPC required scopes missing",
+				)
+
+			return nil,
+				status.Error(
+					codes.PermissionDenied,
+					"insufficient scopes",
+				)
 		}
 	}
 	// Always store auth info so downstream handlers can always read it safely
