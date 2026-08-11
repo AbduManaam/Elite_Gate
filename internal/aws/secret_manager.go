@@ -131,6 +131,23 @@ func (m *AWSSecretManager) CreateSecret(
 			)
 		}
 
+		// AWS returns InvalidRequestException instead of ResourceExistsException
+		// when a secret with this name exists but is scheduled for deletion.
+		// Treat that state as an existing secret so the service can restore it
+		// and rotate its value.
+		var invalidRequestErr *secretsTypes.InvalidRequestException
+		if errors.As(err, &invalidRequestErr) &&
+			strings.Contains(
+				strings.ToLower(err.Error()),
+				"scheduled for deletion",
+			) {
+			return nil, fmt.Errorf(
+				"%w: %v",
+				ErrSecretAlreadyExists,
+				err,
+			)
+		}
+
 		return nil, fmt.Errorf("create secret: %w", err)
 	}
 
