@@ -16,14 +16,20 @@ import (
 )
 
 var (
-	ErrCustomDomainNotFound       = errors.New("custom domain not found")
-	ErrHostnameConflict           = errors.New("hostname already registered")
-	ErrStaleLease                 = errors.New("stale lease token or lock expired")
-	ErrInvalidStateTransition     = errors.New("invalid provisioning state transition")
-	ErrDomainNotEligible          = errors.New("custom domain not eligible for provisioning")
-	ErrDomainNotEligibleForRetry  = errors.New("custom domain not eligible for retry")
-	ErrDomainAlreadyDeprovisioned = errors.New("custom domain already deprovisioned")
+	ErrCustomDomainNotFound          = errors.New("custom domain not found")
+	ErrHostnameConflict              = errors.New("hostname already registered")
+	ErrStaleLease                    = errors.New("stale lease token or lock expired")
+	ErrInvalidStateTransition        = errors.New("invalid provisioning state transition")
+	ErrDomainNotEligible             = errors.New("custom domain not eligible for provisioning")
+	ErrDomainNotEligibleForRetry     = errors.New("custom domain not eligible for retry")
+	ErrDomainAlreadyDeprovisioned    = errors.New("custom domain already deprovisioned")
+	ErrProjectGatewayIngressNotReady = errors.New("project dedicated gateway ingress is not ready")
 )
+
+type ProjectGatewayIngress struct {
+	ExternalID     string
+	TargetGroupARN string
+}
 
 const customDomainAllColumns = `
 	id,
@@ -58,6 +64,8 @@ const customDomainAllColumns = `
 	provisioning_error,
 	provisioning_attempts,
 	next_retry_at,
+	listener_rule_arn,
+	listener_rule_priority,
 	locked_at,
 	locked_by,
 	lease_token
@@ -98,6 +106,8 @@ func scanCustomDomainRow(scanner interface{ Scan(dest ...any) error }) (*domain.
 		&cd.ProvisioningError,
 		&cd.ProvisioningAttempts,
 		&cd.NextRetryAt,
+		&cd.ListenerRuleARN,
+		&cd.ListenerRulePriority,
 		&cd.LockedAt,
 		&cd.LockedBy,
 		&cd.LeaseToken,
@@ -595,6 +605,8 @@ func scanProvisioningJobRow(scanner interface{ Scan(dest ...any) error }) (*doma
 		&job.CertificateManagedByEliteGate,
 		&job.CertificateValidationName,
 		&job.CertificateValidationValue,
+		&job.ListenerRuleARN,
+		&job.ListenerRulePriority,
 		&job.ProvisioningAttempts,
 		&job.NextRetryAt,
 		&job.ProvisioningStartedAt,
@@ -697,6 +709,8 @@ func (r *CustomDomainRepo) ClaimNextProvisioningJob(
 			cd.certificate_managed_by_elitegate,
 			cd.certificate_validation_name,
 			cd.certificate_validation_value,
+			cd.listener_rule_arn,
+			cd.listener_rule_priority,
 			cd.provisioning_attempts,
 			cd.next_retry_at,
 			cd.provisioning_started_at,
@@ -907,11 +921,44 @@ func (r *CustomDomainRepo) MarkProvisioningFailed(
 	return nil
 }
 
-// MarkProvisioningCompleted completes provisioning, sets domain status to active, and clears locks.
+// GetActiveProjectGatewayIngress retrieves the project's active dedicated gateway target group.
+func (r *CustomDomainRepo) GetActiveProjectGatewayIngress(
+	ctx context.Context,
+	projectID uuid.UUID,
+) (*ProjectGatewayIngress, error) {
+	const query = `
+		SELECT external_id, target_group_arn
+		FROM gateways
+		WHERE project_id = $1
+		  AND deleted_at IS NULL
+		  AND plan = 'dedicated'
+		  AND status = 'active'
+		  AND provisioning_status = 'completed'
+		  AND target_group_arn IS NOT NULL
+		  AND BTRIM(target_group_arn) <> ''
+		ORDER BY provisioned_at DESC NULLS LAST, created_at DESC
+		LIMIT 1;
+	`
+
+	var ingress ProjectGatewayIngress
+	err := r.db.QueryRowContext(ctx, query, projectID).Scan(&ingress.ExternalID, &ingress.TargetGroupARN)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrProjectGatewayIngressNotReady
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get active project gateway ingress: %w", err)
+	}
+
+	return &ingress, nil
+}
+
+// MarkProvisioningCompleted completes provisioning, sets domain status to active, saves listener rule metadata, and clears locks.
 func (r *CustomDomainRepo) MarkProvisioningCompleted(
 	ctx context.Context,
 	id uuid.UUID,
 	leaseToken uuid.UUID,
+	listenerRuleARN string,
+	listenerRulePriority int,
 ) error {
 	const query = `
 		UPDATE custom_domains
@@ -922,6 +969,8 @@ func (r *CustomDomainRepo) MarkProvisioningCompleted(
 			certificate_attached_at = COALESCE(certificate_attached_at, NOW()),
 			provisioning_completed_at = NOW(),
 			activated_at = COALESCE(activated_at, NOW()),
+			listener_rule_arn = $7,
+			listener_rule_priority = $8,
 			provisioning_error = NULL,
 			next_retry_at = NULL,
 			locked_at = NULL,
@@ -943,6 +992,8 @@ func (r *CustomDomainRepo) MarkProvisioningCompleted(
 		domain.ProvisioningStatusCompleted,
 		"issued",
 		domain.ProvisioningStatusAttachingCertificate,
+		listenerRuleARN,
+		listenerRulePriority,
 	)
 	if err != nil {
 		return fmt.Errorf("mark provisioning completed: %w", err)

@@ -19,15 +19,26 @@ import (
 )
 
 type mockProvisioningRepo struct {
-	ClaimNextProvisioningJobFn  func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error)
-	AdvanceProvisioningStateFn  func(ctx context.Context, params storage.AdvanceProvisioningParams) error
-	ScheduleProvisioningPollFn  func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextPollAt time.Time) error
-	ScheduleProvisioningRetryFn func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextRetryAt time.Time, provisioningError string) error
-	MarkProvisioningFailedFn    func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, provisioningError string) error
-	MarkProvisioningCompletedFn func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
-	MarkDeprovisionedFn         func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
-	MarkDeprovisionFailedFn     func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, errStr string) error
-	ReleaseProvisioningLeaseFn  func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
+	ClaimNextProvisioningJobFn       func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error)
+	AdvanceProvisioningStateFn       func(ctx context.Context, params storage.AdvanceProvisioningParams) error
+	ScheduleProvisioningPollFn       func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextPollAt time.Time) error
+	ScheduleProvisioningRetryFn      func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextRetryAt time.Time, provisioningError string) error
+	MarkProvisioningFailedFn         func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, provisioningError string) error
+	MarkProvisioningCompletedFn      func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, listenerRuleARN string, listenerRulePriority int) error
+	MarkDeprovisionedFn              func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
+	MarkDeprovisionFailedFn          func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, errStr string) error
+	ReleaseProvisioningLeaseFn       func(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
+	GetActiveProjectGatewayIngressFn func(ctx context.Context, projectID uuid.UUID) (*storage.ProjectGatewayIngress, error)
+}
+
+func (m *mockProvisioningRepo) GetActiveProjectGatewayIngress(ctx context.Context, projectID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+	if m.GetActiveProjectGatewayIngressFn != nil {
+		return m.GetActiveProjectGatewayIngressFn(ctx, projectID)
+	}
+	return &storage.ProjectGatewayIngress{
+		ExternalID:     "gw_mock123",
+		TargetGroupARN: "arn:aws:elasticloadbalancing:ap-south-1:123456789012:targetgroup/tg-mock/123",
+	}, nil
 }
 
 func (m *mockProvisioningRepo) MarkDeprovisioned(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error {
@@ -79,9 +90,9 @@ func (m *mockProvisioningRepo) MarkProvisioningFailed(ctx context.Context, id uu
 	return nil
 }
 
-func (m *mockProvisioningRepo) MarkProvisioningCompleted(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error {
+func (m *mockProvisioningRepo) MarkProvisioningCompleted(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, listenerRuleARN string, listenerRulePriority int) error {
 	if m.MarkProvisioningCompletedFn != nil {
-		return m.MarkProvisioningCompletedFn(ctx, id, leaseToken)
+		return m.MarkProvisioningCompletedFn(ctx, id, leaseToken, listenerRuleARN, listenerRulePriority)
 	}
 	return nil
 }
@@ -760,7 +771,7 @@ func TestAttachingCertificate_Success_MarksCompleted(t *testing.T) {
 				LeaseToken:                    &leaseToken,
 			}, nil
 		},
-		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
 			completedCalled = true
 			assert.Equal(t, jobID, id)
 			assert.Equal(t, leaseToken, lToken)
@@ -805,7 +816,7 @@ func TestAttachingCertificate_AlreadyAttached_TreatedAsSuccess(t *testing.T) {
 				LeaseToken:                    &leaseToken,
 			}, nil
 		},
-		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
 			completedCalled = true
 			return nil
 		},
@@ -1180,7 +1191,7 @@ func TestProvisioningWorkflow_EndToEnd_ManagedFlagPersistence(t *testing.T) {
 			}
 			return nil
 		},
-		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
 			completedCalled = true
 			return nil
 		},
@@ -1226,4 +1237,413 @@ func TestProvisioningWorkflow_EndToEnd_ManagedFlagPersistence(t *testing.T) {
 	assert.True(t, processed)
 	assert.False(t, failedCalled, "Worker must NOT fail with 'certificate is not managed by EliteGate'")
 	assert.True(t, completedCalled, "Provisioning must complete successfully")
+}
+
+func TestHostRule_AttachingCertificateSuccess_CreatesHostRuleBeforeActive(t *testing.T) {
+	jobID := uuid.New()
+	projectID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+	tgARN := "arn:aws:elasticloadbalancing:ap-south-1:123456789012:targetgroup/tg-project-123/456"
+	expectedRuleARN := "arn:aws:elasticloadbalancing:ap-south-1:123456789012:listener-rule/app/alb/123/456/789"
+	expectedPriority := int32(40001)
+
+	var ops []string
+
+	mockAWS := &aws.MockAWSClient{
+		DescribeCertificateFn: func(ctx context.Context, certificateARN string) (*aws.CertificateDetails, error) {
+			return &aws.CertificateDetails{
+				ARN:    certARN,
+				Status: "ISSUED",
+			}, nil
+		},
+		AttachCertificateToListenerFn: func(ctx context.Context, listenerARN string, certificateARN string) error {
+			ops = append(ops, "AttachCertificateToListener")
+			return nil
+		},
+		EnsureHostRuleFn: func(ctx context.Context, listenerARN, hostname, targetGroupARN string, minPriority, maxPriority int32) (string, int32, error) {
+			ops = append(ops, "EnsureHostRule")
+			assert.Equal(t, "app.example.com", hostname)
+			assert.Equal(t, tgARN, targetGroupARN)
+			assert.Equal(t, int32(40001), minPriority)
+			assert.Equal(t, int32(50000), maxPriority)
+			return expectedRuleARN, expectedPriority, nil
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				ProjectID:                     projectID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusAttachingCertificate,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		GetActiveProjectGatewayIngressFn: func(ctx context.Context, pID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+			ops = append(ops, "GetActiveProjectGatewayIngress")
+			assert.Equal(t, projectID, pID)
+			return &storage.ProjectGatewayIngress{
+				ExternalID:     "gw_123",
+				TargetGroupARN: tgARN,
+			}, nil
+		},
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
+			ops = append(ops, "MarkProvisioningCompleted")
+			assert.Equal(t, jobID, id)
+			assert.Equal(t, leaseToken, lToken)
+			assert.Equal(t, expectedRuleARN, ruleARN)
+			assert.Equal(t, int(expectedPriority), priority)
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	expectedOrder := []string{
+		"AttachCertificateToListener",
+		"GetActiveProjectGatewayIngress",
+		"EnsureHostRule",
+		"MarkProvisioningCompleted",
+	}
+	assert.Equal(t, expectedOrder, ops)
+}
+
+func TestHostRule_NoActiveProjectGateway_SchedulesRetry(t *testing.T) {
+	jobID := uuid.New()
+	projectID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+
+	ensureCalled := false
+	completedCalled := false
+	retryScheduled := false
+
+	mockAWS := &aws.MockAWSClient{
+		DescribeCertificateFn: func(ctx context.Context, certificateARN string) (*aws.CertificateDetails, error) {
+			return &aws.CertificateDetails{
+				ARN:    certARN,
+				Status: "ISSUED",
+			}, nil
+		},
+		EnsureHostRuleFn: func(ctx context.Context, listenerARN, hostname, targetGroupARN string, minPriority, maxPriority int32) (string, int32, error) {
+			ensureCalled = true
+			return "", 0, nil
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				ProjectID:                     projectID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusAttachingCertificate,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		GetActiveProjectGatewayIngressFn: func(ctx context.Context, pID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+			return nil, storage.ErrProjectGatewayIngressNotReady
+		},
+		ScheduleProvisioningRetryFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, expectedStatus string, nextRetryAt time.Time, provisioningError string) error {
+			retryScheduled = true
+			assert.Contains(t, provisioningError, "ingress is not ready")
+			return nil
+		},
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
+			completedCalled = true
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.False(t, ensureCalled)
+	assert.False(t, completedCalled)
+	assert.True(t, retryScheduled)
+}
+
+func TestHostRule_AWSFailure_SchedulesRetry(t *testing.T) {
+	jobID := uuid.New()
+	projectID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+
+	completedCalled := false
+	retryScheduled := false
+
+	mockAWS := &aws.MockAWSClient{
+		DescribeCertificateFn: func(ctx context.Context, certificateARN string) (*aws.CertificateDetails, error) {
+			return &aws.CertificateDetails{
+				ARN:    certARN,
+				Status: "ISSUED",
+			}, nil
+		},
+		EnsureHostRuleFn: func(ctx context.Context, listenerARN, hostname, targetGroupARN string, minPriority, maxPriority int32) (string, int32, error) {
+			return "", 0, errors.New("503 Service Unavailable")
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				ProjectID:                     projectID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusAttachingCertificate,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		GetActiveProjectGatewayIngressFn: func(ctx context.Context, pID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+			return &storage.ProjectGatewayIngress{
+				ExternalID:     "gw_123",
+				TargetGroupARN: "arn:aws:tg:123",
+			}, nil
+		},
+		ScheduleProvisioningRetryFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, expectedStatus string, nextRetryAt time.Time, provisioningError string) error {
+			retryScheduled = true
+			return nil
+		},
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
+			completedCalled = true
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.False(t, completedCalled)
+	assert.True(t, retryScheduled)
+}
+
+func TestHostRule_TargetConflict_MarksFailed(t *testing.T) {
+	jobID := uuid.New()
+	projectID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+
+	completedCalled := false
+	failedMarked := false
+
+	mockAWS := &aws.MockAWSClient{
+		DescribeCertificateFn: func(ctx context.Context, certificateARN string) (*aws.CertificateDetails, error) {
+			return &aws.CertificateDetails{
+				ARN:    certARN,
+				Status: "ISSUED",
+			}, nil
+		},
+		EnsureHostRuleFn: func(ctx context.Context, listenerARN, hostname, targetGroupARN string, minPriority, maxPriority int32) (string, int32, error) {
+			return "", 0, aws.ErrHostRuleTargetConflict
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				ProjectID:                     projectID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusAttachingCertificate,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		GetActiveProjectGatewayIngressFn: func(ctx context.Context, pID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+			return &storage.ProjectGatewayIngress{
+				ExternalID:     "gw_123",
+				TargetGroupARN: "arn:aws:tg:123",
+			}, nil
+		},
+		MarkProvisioningFailedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, expectedStatus, provisioningError string) error {
+			failedMarked = true
+			assert.Contains(t, provisioningError, "already routed to another target group")
+			return nil
+		},
+		MarkProvisioningCompletedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID, ruleARN string, priority int) error {
+			completedCalled = true
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.False(t, completedCalled)
+	assert.True(t, failedMarked)
+}
+
+func TestDeprovisioning_DeletesListenerRuleFirst(t *testing.T) {
+	jobID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+	ruleARN := "arn:aws:elasticloadbalancing:ap-south-1:123456789012:listener-rule/app/alb/123/456/789"
+
+	var ops []string
+
+	mockAWS := &aws.MockAWSClient{
+		DeleteGatewayHostRuleFn: func(ctx context.Context, rARN string) error {
+			ops = append(ops, "delete_listener_rule")
+			assert.Equal(t, ruleARN, rARN)
+			return nil
+		},
+		DetachCertificateFromListenerFn: func(ctx context.Context, listenerARN, certificateARN string) error {
+			ops = append(ops, "detach_certificate")
+			return nil
+		},
+		DeleteCertificateFn: func(ctx context.Context, certificateARN string) error {
+			ops = append(ops, "delete_certificate")
+			return nil
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusDeprovisioning,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				ListenerRuleARN:               &ruleARN,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		MarkDeprovisionedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+			ops = append(ops, "mark_deprovisioned")
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	expectedOrder := []string{
+		"delete_listener_rule",
+		"detach_certificate",
+		"delete_certificate",
+		"mark_deprovisioned",
+	}
+	assert.Equal(t, expectedOrder, ops)
+}
+
+func TestDeprovisioning_ListenerRuleAlreadyAbsent_ContinuesCertCleanup(t *testing.T) {
+	jobID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+	ruleARN := "arn:aws:elasticloadbalancing:ap-south-1:123456789012:listener-rule/app/alb/123/456/789"
+
+	detachCalled := false
+	deleteCertCalled := false
+	markDeprovisionedCalled := false
+
+	mockAWS := &aws.MockAWSClient{
+		DeleteGatewayHostRuleFn: func(ctx context.Context, rARN string) error {
+			return &acmTypes.ResourceNotFoundException{Message: stringPtr("Rule not found")}
+		},
+		DetachCertificateFromListenerFn: func(ctx context.Context, listenerARN, certificateARN string) error {
+			detachCalled = true
+			return nil
+		},
+		DeleteCertificateFn: func(ctx context.Context, certificateARN string) error {
+			deleteCertCalled = true
+			return nil
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusDeprovisioning,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				ListenerRuleARN:               &ruleARN,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		MarkDeprovisionedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+			markDeprovisionedCalled = true
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.True(t, detachCalled)
+	assert.True(t, deleteCertCalled)
+	assert.True(t, markDeprovisionedCalled)
+}
+
+func TestDeprovisioning_DomainWithoutListenerRuleARN_DeprovisionsSafely(t *testing.T) {
+	jobID := uuid.New()
+	leaseToken := uuid.New()
+	certARN := "arn:aws:acm:ap-south-1:123456789012:certificate/test-cert"
+
+	deleteRuleCalled := false
+	detachCalled := false
+	deleteCertCalled := false
+	markDeprovisionedCalled := false
+
+	mockAWS := &aws.MockAWSClient{
+		DeleteGatewayHostRuleFn: func(ctx context.Context, rARN string) error {
+			deleteRuleCalled = true
+			return nil
+		},
+		DetachCertificateFromListenerFn: func(ctx context.Context, listenerARN, certificateARN string) error {
+			detachCalled = true
+			return nil
+		},
+		DeleteCertificateFn: func(ctx context.Context, certificateARN string) error {
+			deleteCertCalled = true
+			return nil
+		},
+	}
+
+	mockRepo := &mockProvisioningRepo{
+		ClaimNextProvisioningJobFn: func(ctx context.Context, workerID string, lockTimeout time.Duration) (*domain.ProvisioningJob, error) {
+			return &domain.ProvisioningJob{
+				ID:                            jobID,
+				Hostname:                      "app.example.com",
+				ProvisioningStatus:            domain.ProvisioningStatusDeprovisioning,
+				CertificateARN:                &certARN,
+				CertificateManagedByEliteGate: true,
+				ListenerRuleARN:               nil,
+				LeaseToken:                    &leaseToken,
+			}, nil
+		},
+		MarkDeprovisionedFn: func(ctx context.Context, id uuid.UUID, lToken uuid.UUID) error {
+			markDeprovisionedCalled = true
+			return nil
+		},
+	}
+
+	provisioner := newTestProvisioner(mockRepo, mockAWS)
+	processed, err := provisioner.ProcessNextJob(context.Background())
+	require.NoError(t, err)
+	assert.True(t, processed)
+	assert.False(t, deleteRuleCalled)
+	assert.True(t, detachCalled)
+	assert.True(t, deleteCertCalled)
+	assert.True(t, markDeprovisionedCalled)
 }

@@ -218,6 +218,136 @@ func (c *Client) GetGatewayTargetHealth(
 	return string(output.TargetHealthDescriptions[0].TargetHealth.State), nil
 }
 
+var ErrHostRuleTargetConflict = errors.New("hostname is already routed to another target group")
+
+func isPriorityInUseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var priorityInUseErr *albTypes.PriorityInUseException
+	if errors.As(err, &priorityInUseErr) {
+		return true
+	}
+	lowered := strings.ToLower(err.Error())
+	return strings.Contains(lowered, "priorityinuse") || strings.Contains(lowered, "priority in use")
+}
+
+// EnsureHostRule idempotently creates an ALB host-header routing rule for a custom domain,
+// paginating through all listener rules and selecting a free priority in [minPriority, maxPriority].
+func (c *Client) EnsureHostRule(
+	ctx context.Context,
+	listenerARN string,
+	hostname string,
+	targetGroupARN string,
+	minPriority int32,
+	maxPriority int32,
+) (string, int32, error) {
+	listenerARN = strings.TrimSpace(listenerARN)
+	hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	targetGroupARN = strings.TrimSpace(targetGroupARN)
+
+	if listenerARN == "" || hostname == "" || targetGroupARN == "" {
+		return "", 0, errors.New("listener ARN, hostname, and target group ARN are required")
+	}
+	if minPriority < 1 || maxPriority > 50000 || minPriority > maxPriority {
+		return "", 0, errors.New("invalid priority range")
+	}
+
+	client, err := c.gatewayALBClient()
+	if err != nil {
+		return "", 0, err
+	}
+
+	maxAttempts := 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Paginate DescribeRules to fetch ALL listener rules
+		var allRules []albTypes.Rule
+		paginator := elasticloadbalancingv2.NewDescribeRulesPaginator(client, &elasticloadbalancingv2.DescribeRulesInput{
+			ListenerArn: sdkaws.String(listenerARN),
+		})
+
+		var pageErr error
+		for paginator.HasMorePages() {
+			page, pErr := paginator.NextPage(ctx)
+			if pErr != nil {
+				pageErr = fmt.Errorf("describe listener rules page: %w", pErr)
+				break
+			}
+			allRules = append(allRules, page.Rules...)
+		}
+		if pageErr != nil {
+			return "", 0, pageErr
+		}
+
+		// Check if rule already exists for hostname
+		ruleARN, priority, conflict := findCustomDomainHostRuleDetails(allRules, hostname, targetGroupARN)
+		if ruleARN != "" {
+			return ruleARN, priority, nil
+		}
+		if conflict {
+			return "", 0, ErrHostRuleTargetConflict
+		}
+
+		// Find available priority in [minPriority, maxPriority]
+		assigned := make(map[int32]bool)
+		for _, r := range allRules {
+			if r.Priority != nil && sdkaws.ToString(r.Priority) != "default" {
+				var p int32
+				if _, scanErr := fmt.Sscanf(sdkaws.ToString(r.Priority), "%d", &p); scanErr == nil {
+					assigned[p] = true
+				}
+			}
+		}
+
+		var selectedPriority int32 = -1
+		for p := minPriority; p <= maxPriority; p++ {
+			if !assigned[p] {
+				selectedPriority = p
+				break
+			}
+		}
+		if selectedPriority == -1 {
+			return "", 0, errors.New("no available listener rule priority in requested range")
+		}
+
+		output, err := client.CreateRule(
+			ctx,
+			&elasticloadbalancingv2.CreateRuleInput{
+				ListenerArn: sdkaws.String(listenerARN),
+				Priority:    sdkaws.Int32(selectedPriority),
+				Conditions: []albTypes.RuleCondition{
+					{
+						Field: sdkaws.String("host-header"),
+						HostHeaderConfig: &albTypes.HostHeaderConditionConfig{
+							Values: []string{hostname},
+						},
+					},
+				},
+				Actions: []albTypes.Action{
+					{
+						Type:           albTypes.ActionTypeEnumForward,
+						TargetGroupArn: sdkaws.String(targetGroupARN),
+					},
+				},
+			},
+		)
+		if err != nil {
+			if isPriorityInUseError(err) {
+				continue // Retry loop on PriorityInUse race condition
+			}
+			return "", 0, fmt.Errorf("create listener rule: %w", err)
+		}
+
+		if len(output.Rules) == 0 || output.Rules[0].RuleArn == nil {
+			return "", 0, errors.New("AWS returned no listener rule ARN")
+		}
+
+		return sdkaws.ToString(output.Rules[0].RuleArn), selectedPriority, nil
+	}
+
+	return "", 0, errors.New("failed to acquire listener rule priority after max attempts due to PriorityInUse race")
+}
+
 // CreateGatewayHostRule routes one gateway hostname to its target group.
 func (c *Client) CreateGatewayHostRule(
 	ctx context.Context,
@@ -291,6 +421,15 @@ func findGatewayHostRule(
 	hostname string,
 	targetGroupARN string,
 ) (ruleARN string, conflict bool) {
+	arn, _, conflict := findCustomDomainHostRuleDetails(rules, hostname, targetGroupARN)
+	return arn, conflict
+}
+
+func findCustomDomainHostRuleDetails(
+	rules []albTypes.Rule,
+	hostname string,
+	targetGroupARN string,
+) (ruleARN string, priority int32, conflict bool) {
 	expectedHost := strings.TrimSuffix(
 		strings.ToLower(strings.TrimSpace(hostname)),
 		".",
@@ -321,17 +460,22 @@ func findGatewayHostRule(
 			continue
 		}
 
+		var p int32
+		if rule.Priority != nil && sdkaws.ToString(rule.Priority) != "default" {
+			_, _ = fmt.Sscanf(sdkaws.ToString(rule.Priority), "%d", &p)
+		}
+
 		for _, action := range rule.Actions {
 			if action.Type == albTypes.ActionTypeEnumForward &&
 				sdkaws.ToString(action.TargetGroupArn) == targetGroupARN {
-				return sdkaws.ToString(rule.RuleArn), false
+				return sdkaws.ToString(rule.RuleArn), p, false
 			}
 		}
 
-		return "", true
+		return "", 0, true
 	}
 
-	return "", false
+	return "", 0, false
 }
 
 // DeleteGatewayHostRule removes the public hostname routing rule.

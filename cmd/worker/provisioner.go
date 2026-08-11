@@ -114,17 +114,18 @@ type ProvisioningRepository interface {
 	ScheduleProvisioningPoll(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextPollAt time.Time) error
 	ScheduleProvisioningRetry(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, nextRetryAt time.Time, provisioningError string) error
 	MarkProvisioningFailed(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, expectedStatus string, provisioningError string) error
-	MarkProvisioningCompleted(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
+	MarkProvisioningCompleted(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, listenerRuleARN string, listenerRulePriority int) error
 	MarkDeprovisioned(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
 	MarkDeprovisionFailed(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID, errStr string) error
 	ReleaseProvisioningLease(ctx context.Context, id uuid.UUID, leaseToken uuid.UUID) error
+	GetActiveProjectGatewayIngress(ctx context.Context, projectID uuid.UUID) (*storage.ProjectGatewayIngress, error)
 }
 
-// Provisioner coordinates AWS ACM certificate requests, validation, and listener attachment.
+// Provisioner coordinates AWS ACM certificate requests, validation, listener attachment, and host routing.
 type Provisioner struct {
 	repo         ProvisioningRepository
 	certificates aws.CertificateManager
-	loadBalancer aws.LoadBalancerManager
+	loadBalancer aws.CustomDomainLoadBalancerManager
 	workerID     string
 	listenerARN  string
 	metrics      *metrics.CustomDomainMetrics
@@ -137,7 +138,7 @@ type Provisioner struct {
 func NewProvisioner(
 	repo ProvisioningRepository,
 	certificates aws.CertificateManager,
-	loadBalancer aws.LoadBalancerManager,
+	loadBalancer aws.CustomDomainLoadBalancerManager,
 	workerID string,
 	listenerARN string,
 	logger zerolog.Logger,
@@ -769,13 +770,112 @@ func (p *Provisioner) handleAttachingCertificate(ctx context.Context, job *domai
 		)
 	}
 
-	// 3. Complete Provisioning & Mark Active
+	// 3. Resolve project's active dedicated gateway target group
+	gatewayIngress, err := p.repo.GetActiveProjectGatewayIngress(ctx, job.ProjectID)
+	if err != nil {
+		if errors.Is(err, storage.ErrProjectGatewayIngressNotReady) {
+			p.logger.Info().
+				Str("job_id", job.ID.String()).
+				Str("project_id", job.ProjectID.String()).
+				Msg("project dedicated gateway ingress is not ready yet; scheduling retry")
+
+			retryAt := p.now().Add(CalculateRetryDelay(job.ProvisioningAttempts + 1))
+			return p.repo.ScheduleProvisioningRetry(
+				ctx,
+				job.ID,
+				leaseToken,
+				domain.ProvisioningStatusAttachingCertificate,
+				retryAt,
+				"Project dedicated gateway ingress is not ready",
+			)
+		}
+
+		p.logger.Error().
+			Err(err).
+			Str("job_id", job.ID.String()).
+			Str("project_id", job.ProjectID.String()).
+			Msg("failed to query active project gateway ingress")
+
+		retryAt := p.now().Add(CalculateRetryDelay(job.ProvisioningAttempts + 1))
+		return p.repo.ScheduleProvisioningRetry(
+			ctx,
+			job.ID,
+			leaseToken,
+			domain.ProvisioningStatusAttachingCertificate,
+			retryAt,
+			"Failed to query active project gateway ingress: "+err.Error(),
+		)
+	}
+
+	// 4. Ensure custom-domain ALB host rule (priority range 40001..50000)
 	p.logger.Info().
 		Str("job_id", job.ID.String()).
 		Str("hostname", job.Hostname).
-		Msg("ALB attachment succeeded; marking domain active and completing provisioning")
+		Str("target_group_arn", gatewayIngress.TargetGroupARN).
+		Msg("creating ALB host routing rule for custom domain")
 
-	return p.repo.MarkProvisioningCompleted(ctx, job.ID, leaseToken)
+	ruleARN, rulePriority, err := p.loadBalancer.EnsureHostRule(
+		ctx,
+		p.listenerARN,
+		job.Hostname,
+		gatewayIngress.TargetGroupARN,
+		40001,
+		50000,
+	)
+	if err != nil {
+		if errors.Is(err, aws.ErrHostRuleTargetConflict) {
+			p.logger.Error().
+				Err(err).
+				Str("job_id", job.ID.String()).
+				Str("hostname", job.Hostname).
+				Msg("custom domain hostname is already routed to another target group")
+
+			return p.repo.MarkProvisioningFailed(
+				ctx,
+				job.ID,
+				leaseToken,
+				domain.ProvisioningStatusAttachingCertificate,
+				"Custom domain hostname is already routed to another target group",
+			)
+		}
+
+		cat, reason := ClassifyAWSError(err)
+		p.logger.Error().
+			Err(err).
+			Str("job_id", job.ID.String()).
+			Str("hostname", job.Hostname).
+			Msg("failed to create ALB host routing rule")
+
+		if cat == ErrorCategoryTerminal {
+			return p.repo.MarkProvisioningFailed(
+				ctx,
+				job.ID,
+				leaseToken,
+				domain.ProvisioningStatusAttachingCertificate,
+				reason,
+			)
+		}
+
+		retryAt := p.now().Add(CalculateRetryDelay(job.ProvisioningAttempts + 1))
+		return p.repo.ScheduleProvisioningRetry(
+			ctx,
+			job.ID,
+			leaseToken,
+			domain.ProvisioningStatusAttachingCertificate,
+			retryAt,
+			reason,
+		)
+	}
+
+	// 5. Complete Provisioning & Mark Active
+	p.logger.Info().
+		Str("job_id", job.ID.String()).
+		Str("hostname", job.Hostname).
+		Str("listener_rule_arn", ruleARN).
+		Int32("listener_rule_priority", rulePriority).
+		Msg("ALB attachment and host routing succeeded; marking domain active and completing provisioning")
+
+	return p.repo.MarkProvisioningCompleted(ctx, job.ID, leaseToken, ruleARN, int(rulePriority))
 }
 
 func (p *Provisioner) handleDeprovisioning(ctx context.Context, job *domain.ProvisioningJob) error {
@@ -784,11 +884,38 @@ func (p *Provisioner) handleDeprovisioning(ctx context.Context, job *domain.Prov
 	}
 	leaseToken := *job.LeaseToken
 
+	// Step 1: Delete custom-domain ALB host rule first (if present)
+	if job.ListenerRuleARN != nil && strings.TrimSpace(*job.ListenerRuleARN) != "" && p.loadBalancer != nil {
+		ruleARN := *job.ListenerRuleARN
+		p.logger.Info().
+			Str("job_id", job.ID.String()).
+			Str("hostname", job.Hostname).
+			Str("listener_rule_arn", ruleARN).
+			Msg("deleting ALB custom-domain host routing rule")
+
+		err := p.loadBalancer.DeleteGatewayHostRule(ctx, ruleARN)
+		if err != nil && !isResourceNotFoundErr(err) {
+			cat, reason := ClassifyAWSError(err)
+			p.logger.Error().
+				Err(err).
+				Int("category", int(cat)).
+				Str("reason", reason).
+				Msg("failed to delete custom-domain listener rule from ALB")
+
+			if cat == ErrorCategoryTransient {
+				delay := CalculateRetryDelay(job.ProvisioningAttempts + 1)
+				nextRetry := p.now().Add(delay)
+				return p.repo.ScheduleProvisioningRetry(ctx, job.ID, leaseToken, domain.ProvisioningStatusDeprovisioning, nextRetry, reason)
+			}
+			return p.repo.MarkDeprovisionFailed(ctx, job.ID, leaseToken, reason)
+		}
+	}
+
 	// Check certificate ownership & ARN
 	if job.CertificateARN != nil && *job.CertificateARN != "" && job.CertificateManagedByEliteGate {
 		certARN := *job.CertificateARN
 
-		// Step 1: Detach certificate from ALB HTTPS listener
+		// Step 2: Detach certificate from ALB HTTPS listener
 		if p.listenerARN != "" && p.loadBalancer != nil {
 			p.logger.Info().
 				Str("job_id", job.ID.String()).
@@ -816,7 +943,7 @@ func (p *Provisioner) handleDeprovisioning(ctx context.Context, job *domain.Prov
 			}
 		}
 
-		// Step 2: Delete ACM Certificate (called ONLY after detach returns success or already unattached)
+		// Step 3: Delete ACM Certificate (called ONLY after detach returns success or already unattached)
 		if p.certificates != nil {
 			p.logger.Info().
 				Str("job_id", job.ID.String()).
@@ -843,7 +970,7 @@ func (p *Provisioner) handleDeprovisioning(ctx context.Context, job *domain.Prov
 		}
 	}
 
-	// Step 3: Finalize DB state & soft-delete
+	// Step 4: Finalize DB state & soft-delete
 	p.logger.Info().
 		Str("job_id", job.ID.String()).
 		Str("hostname", job.Hostname).

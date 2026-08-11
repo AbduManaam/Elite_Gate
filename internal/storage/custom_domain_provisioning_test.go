@@ -148,7 +148,7 @@ func TestClaimNextProvisioningJob_Success(t *testing.T) {
 				{
 					id.String(), projectID.String(), "example.com", "verified", "ready",
 					domain.ProvisioningStatusRequestingCertificate, nil, nil,
-					true, nil, nil, 0, now, now, now, "worker-1", leaseToken.String(), nil,
+					true, nil, nil, nil, nil, 0, now, now, now, "worker-1", leaseToken.String(), nil,
 				},
 			},
 		}, nil
@@ -345,6 +345,8 @@ func TestMarkProvisioningCompleted_Success(t *testing.T) {
 		context.Background(),
 		uuid.New(),
 		uuid.New(),
+		"arn:aws:elasticloadbalancing:ap-south-1:123:listener-rule/rule-123",
+		40001,
 	)
 	require.NoError(t, err)
 }
@@ -405,6 +407,7 @@ func (r *mockCustomDomainRows) Columns() []string {
 		"certificate_attached_at", "provisioning_started_at",
 		"provisioning_completed_at", "deprovisioning_started_at",
 		"provisioning_error", "provisioning_attempts", "next_retry_at",
+		"listener_rule_arn", "listener_rule_priority",
 		"locked_at", "locked_by", "lease_token",
 	}
 }
@@ -443,7 +446,7 @@ func TestEnqueueProvisioning_Success(t *testing.T) {
 					now, now, nil, "target.acm", "ready", now, nil,
 					true, domain.ProvisioningStatusRequestingCertificate, nil, nil,
 					now, nil, nil, now, nil, nil,
-					nil, 0, now, nil, nil, nil,
+					nil, 0, now, nil, nil, nil, nil, nil,
 				},
 			},
 		}, nil

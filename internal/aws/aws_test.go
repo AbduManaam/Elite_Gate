@@ -235,4 +235,13 @@ func TestMockAWSClient(t *testing.T) {
 
 	err = client.DeleteCertificate(ctx, certARN)
 	require.NoError(t, err)
+
+	var customDomainLB aws.CustomDomainLoadBalancerManager = &aws.MockAWSClient{}
+	ruleARN, priority, err := customDomainLB.EnsureHostRule(ctx, "arn:listener", "app.customer.com", "arn:aws:tg:123", 40001, 50000)
+	require.NoError(t, err)
+	assert.Contains(t, ruleARN, "app.customer.com")
+	assert.Equal(t, int32(40001), priority)
+
+	err = customDomainLB.DeleteGatewayHostRule(ctx, ruleARN)
+	require.NoError(t, err)
 }

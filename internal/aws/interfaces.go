@@ -34,6 +34,29 @@ type AWSProvisioner interface {
 	LoadBalancerManager
 }
 
+// CustomDomainLoadBalancerManager defines ALB operations required for custom-domain certificate attachment and host-rule management.
+type CustomDomainLoadBalancerManager interface {
+	LoadBalancerManager
+
+	EnsureHostRule(
+		ctx context.Context,
+		listenerARN string,
+		hostname string,
+		targetGroupARN string,
+		minPriority int32,
+		maxPriority int32,
+	) (
+		ruleARN string,
+		priority int32,
+		err error,
+	)
+
+	DeleteGatewayHostRule(
+		ctx context.Context,
+		ruleARN string,
+	) error
+}
+
 // DedicatedGatewayLoadBalancerManager defines ALB operations required for
 // exposing and removing dedicated gateway containers.
 type DedicatedGatewayLoadBalancerManager interface {

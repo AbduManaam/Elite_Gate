@@ -104,6 +104,8 @@ type CustomDomain struct {
 	ProvisioningError             *string    `json:"provisioning_error,omitempty"`
 	ProvisioningAttempts          int        `json:"provisioning_attempts"`
 	NextRetryAt                   *time.Time `json:"next_retry_at,omitempty"`
+	ListenerRuleARN               *string    `json:"-"`
+	ListenerRulePriority          *int       `json:"-"`
 	LockedAt                      *time.Time `json:"-"`
 	LockedBy                      *string    `json:"-"`
 	LeaseToken                    *uuid.UUID `json:"-"`
@@ -122,6 +124,8 @@ type ProvisioningJob struct {
 	CertificateManagedByEliteGate bool       `json:"certificate_managed_by_elitegate"`
 	CertificateValidationName     *string    `json:"certificate_validation_name,omitempty"`
 	CertificateValidationValue    *string    `json:"certificate_validation_value,omitempty"`
+	ListenerRuleARN               *string    `json:"-"`
+	ListenerRulePriority          *int       `json:"-"`
 	ProvisioningAttempts          int        `json:"provisioning_attempts"`
 	NextRetryAt                   *time.Time `json:"next_retry_at,omitempty"`
 	ProvisioningStartedAt         *time.Time `json:"provisioning_started_at,omitempty"`

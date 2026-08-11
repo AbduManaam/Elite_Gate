@@ -39,6 +39,8 @@ func TestCustomDomainFieldAssignments(t *testing.T) {
 	errStr := "ACM error"
 	leaseID := uuid.New()
 	workerID := "worker-1"
+	ruleARN := "arn:aws:elasticloadbalancing:ap-south-1:123456789012:listener-rule/app/alb/123/456/789"
+	priority := 40001
 
 	cd := domain.CustomDomain{
 		ID:                            uuid.New(),
@@ -60,6 +62,8 @@ func TestCustomDomainFieldAssignments(t *testing.T) {
 		ProvisioningError:             &errStr,
 		ProvisioningAttempts:          2,
 		NextRetryAt:                   &now,
+		ListenerRuleARN:               &ruleARN,
+		ListenerRulePriority:          &priority,
 		LockedAt:                      &now,
 		LockedBy:                      &workerID,
 		LeaseToken:                    &leaseID,
@@ -72,6 +76,29 @@ func TestCustomDomainFieldAssignments(t *testing.T) {
 	assert.Equal(t, 2, cd.ProvisioningAttempts)
 	assert.Equal(t, &leaseID, cd.LeaseToken)
 	assert.Equal(t, &workerID, cd.LockedBy)
+	require.NotNil(t, cd.ListenerRuleARN)
+	assert.Equal(t, ruleARN, *cd.ListenerRuleARN)
+	require.NotNil(t, cd.ListenerRulePriority)
+	assert.Equal(t, priority, *cd.ListenerRulePriority)
+
+	job := domain.ProvisioningJob{
+		ID:                   uuid.New(),
+		ProjectID:            uuid.New(),
+		Hostname:             "domain.com",
+		Status:               domain.CustomDomainStatusActive,
+		RoutingStatus:        "ready",
+		ProvisioningStatus:   domain.ProvisioningStatusCompleted,
+		ListenerRuleARN:      &ruleARN,
+		ListenerRulePriority: &priority,
+	}
+	require.NotNil(t, job.ListenerRuleARN)
+	assert.Equal(t, ruleARN, *job.ListenerRuleARN)
+	require.NotNil(t, job.ListenerRulePriority)
+	assert.Equal(t, priority, *job.ListenerRulePriority)
+}
+
+func TestErrProjectGatewayIngressNotReady(t *testing.T) {
+	assert.Equal(t, "project dedicated gateway ingress is not ready", storage.ErrProjectGatewayIngressNotReady.Error())
 }
 
 func TestListEligibleSyncDomainsQueryPreserved(t *testing.T) {
