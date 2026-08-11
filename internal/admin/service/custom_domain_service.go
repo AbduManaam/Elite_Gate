@@ -790,25 +790,28 @@ func (s *CustomDomainService) GetProvisioningStatus(
 	}
 
 	var valName *string
+	var valValue *string
 	if cd.ProvisioningStatus == domain.ProvisioningStatusWaitingForValidationRecord ||
 		cd.ProvisioningStatus == domain.ProvisioningStatusWaitingForDNS {
 		valName = cd.CertificateValidationName
+		valValue = cd.CertificateValidationValue
 	}
 
 	return &domain.ProvisioningStatusResponse{
-		ID:                        cd.ID,
-		Hostname:                  cd.Hostname,
-		Status:                    cd.Status,
-		RoutingStatus:             cd.RoutingStatus,
-		ProvisioningStatus:        cd.ProvisioningStatus,
-		CertificateStatus:         cd.CertificateStatus,
-		CertificateValidationName: valName,
-		LastError:                 sanitizedErr,
-		Attempts:                  cd.ProvisioningAttempts,
-		NextRetryAt:               cd.NextRetryAt,
-		CertificateIssuedAt:       cd.CertificateIssuedAt,
-		CertificateAttachedAt:     cd.CertificateAttachedAt,
-		ActivatedAt:               cd.ActivatedAt,
+		ID:                         cd.ID,
+		Hostname:                   cd.Hostname,
+		Status:                     cd.Status,
+		RoutingStatus:              cd.RoutingStatus,
+		ProvisioningStatus:         cd.ProvisioningStatus,
+		CertificateStatus:          cd.CertificateStatus,
+		CertificateValidationName:  valName,
+		CertificateValidationValue: valValue,
+		LastError:                  sanitizedErr,
+		Attempts:                   cd.ProvisioningAttempts,
+		NextRetryAt:                cd.NextRetryAt,
+		CertificateIssuedAt:        cd.CertificateIssuedAt,
+		CertificateAttachedAt:      cd.CertificateAttachedAt,
+		ActivatedAt:                cd.ActivatedAt,
 	}, nil
 }
 

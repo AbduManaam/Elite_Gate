@@ -54,19 +54,20 @@ const (
 
 // ProvisioningStatusResponse represents public, sanitized provisioning status details.
 type ProvisioningStatusResponse struct {
-	ID                        uuid.UUID  `json:"id"`
-	Hostname                  string     `json:"hostname"`
-	Status                    string     `json:"status"`
-	RoutingStatus             string     `json:"routingStatus"`
-	ProvisioningStatus        string     `json:"provisioningStatus"`
-	CertificateStatus         *string    `json:"certificateStatus,omitempty"`
-	CertificateValidationName *string    `json:"certificateValidationName,omitempty"`
-	LastError                 *string    `json:"lastError,omitempty"`
-	Attempts                  int        `json:"attempts"`
-	NextRetryAt               *time.Time `json:"nextRetryAt,omitempty"`
-	CertificateIssuedAt       *time.Time `json:"certificateIssuedAt,omitempty"`
-	CertificateAttachedAt     *time.Time `json:"certificateAttachedAt,omitempty"`
-	ActivatedAt               *time.Time `json:"activatedAt,omitempty"`
+	ID                         uuid.UUID  `json:"id"`
+	Hostname                   string     `json:"hostname"`
+	Status                     string     `json:"status"`
+	RoutingStatus              string     `json:"routingStatus"`
+	ProvisioningStatus         string     `json:"provisioningStatus"`
+	CertificateStatus          *string    `json:"certificateStatus,omitempty"`
+	CertificateValidationName  *string    `json:"certificateValidationName,omitempty"`
+	CertificateValidationValue *string    `json:"certificateValidationValue,omitempty"`
+	LastError                  *string    `json:"lastError,omitempty"`
+	Attempts                   int        `json:"attempts"`
+	NextRetryAt                *time.Time `json:"nextRetryAt,omitempty"`
+	CertificateIssuedAt        *time.Time `json:"certificateIssuedAt,omitempty"`
+	CertificateAttachedAt      *time.Time `json:"certificateAttachedAt,omitempty"`
+	ActivatedAt                *time.Time `json:"activatedAt,omitempty"`
 }
 
 // CustomDomain represents a custom domain entity in the system.

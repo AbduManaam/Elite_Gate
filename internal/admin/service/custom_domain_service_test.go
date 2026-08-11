@@ -1176,7 +1176,7 @@ func TestActivateCustomDomain_AlreadyActive_ReturnsAlreadyActive(t *testing.T) {
 	assert.Equal(t, domain.ActivationAlreadyActive, res.State)
 }
 
-func TestGetProvisioningStatus_SanitizesLastErrorAndExcludesSecretValue(t *testing.T) {
+func TestGetProvisioningStatus_ReturnsACMValidationRecordAndSanitizesLastError(t *testing.T) {
 	logger := zerolog.Nop()
 	repo := newFakeCustomDomainRepo()
 	projectID := uuid.New()
@@ -1202,6 +1202,7 @@ func TestGetProvisioningStatus_SanitizesLastErrorAndExcludesSecretValue(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, "app.example.com", status.Hostname)
 	assert.Equal(t, &valName, status.CertificateValidationName)
+	assert.Equal(t, &valValue, status.CertificateValidationValue)
 	assert.NotNil(t, status.LastError)
 	assert.Equal(t, "An error occurred during certificate provisioning. Please retry or contact support.", *status.LastError)
 }
