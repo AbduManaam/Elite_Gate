@@ -2,12 +2,14 @@ package aws_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	eliteaws "elitegate/internal/aws"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	secretsTypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -218,4 +220,77 @@ func TestAWSSecretManagerRejectsEmptySecret(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "secret value is required")
+}
+
+func TestAWSSecretManager_CreateSecret_ResourceExistsException(t *testing.T) {
+	mock := &mockSecretsManagerAPI{
+		createFn: func(
+			_ context.Context,
+			_ *secretsmanager.CreateSecretInput,
+			_ ...func(*secretsmanager.Options),
+		) (*secretsmanager.CreateSecretOutput, error) {
+			return nil, &secretsTypes.ResourceExistsException{
+				Message: awssdk.String("The secret already exists"),
+			}
+		},
+	}
+
+	manager := eliteaws.NewAWSSecretManagerWithAPI(mock)
+	_, err := manager.CreateSecret(
+		context.Background(),
+		"elitegate/test/project/test",
+		"test-secret-value-32-bytes-long-12345",
+	)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, eliteaws.ErrSecretAlreadyExists))
+}
+
+func TestAWSSecretManager_CreateSecret_PendingDeletionInvalidRequestException(t *testing.T) {
+	mock := &mockSecretsManagerAPI{
+		createFn: func(
+			_ context.Context,
+			_ *secretsmanager.CreateSecretInput,
+			_ ...func(*secretsmanager.Options),
+		) (*secretsmanager.CreateSecretOutput, error) {
+			return nil, &secretsTypes.InvalidRequestException{
+				Message: awssdk.String("You can't create this secret because a secret with this name is already scheduled for deletion."),
+			}
+		},
+	}
+
+	manager := eliteaws.NewAWSSecretManagerWithAPI(mock)
+	_, err := manager.CreateSecret(
+		context.Background(),
+		"elitegate/test/project/test",
+		"test-secret-value-32-bytes-long-12345",
+	)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, eliteaws.ErrSecretAlreadyExists))
+}
+
+func TestAWSSecretManager_CreateSecret_UnrelatedInvalidRequestException(t *testing.T) {
+	mock := &mockSecretsManagerAPI{
+		createFn: func(
+			_ context.Context,
+			_ *secretsmanager.CreateSecretInput,
+			_ ...func(*secretsmanager.Options),
+		) (*secretsmanager.CreateSecretOutput, error) {
+			return nil, &secretsTypes.InvalidRequestException{
+				Message: awssdk.String("The parameter Name is invalid."),
+			}
+		},
+	}
+
+	manager := eliteaws.NewAWSSecretManagerWithAPI(mock)
+	_, err := manager.CreateSecret(
+		context.Background(),
+		"elitegate/test/project/test",
+		"test-secret-value-32-bytes-long-12345",
+	)
+
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, eliteaws.ErrSecretAlreadyExists))
+	assert.Contains(t, err.Error(), "create secret:")
 }

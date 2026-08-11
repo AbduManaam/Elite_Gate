@@ -495,3 +495,44 @@ func TestProjectJWTConfigService_AWSDeleteFailureRestoresDB(
 		repo.cfg.SecretARN,
 	)
 }
+
+func TestProjectJWTConfigService_Create_SecretAlreadyExistsRestoresAndUpdate(
+	t *testing.T,
+) {
+	repo := &fakeProjectJWTConfigRepo{}
+
+	secrets := &fakeJWTSecretManager{
+		createErr: eliteaws.ErrSecretAlreadyExists,
+		updateRef: &eliteaws.SecretReference{
+			ARN:       "arn:aws:secretsmanager:ap-south-1:123456789012:secret:restored",
+			VersionID: "version-restored-1",
+		},
+	}
+
+	svc := NewProjectJWTConfigService(
+		repo,
+		secrets,
+		"production",
+		zerolog.Nop(),
+	)
+
+	cfg, err := svc.Configure(
+		jwtServiceTenantContext(),
+		validJWTConfigInput(),
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, 1, secrets.createCalls)
+	assert.Equal(t, 1, secrets.restoreCalls)
+	assert.Equal(t, 1, secrets.updateCalls)
+	assert.Equal(t, 1, repo.upsertCalls)
+
+	expectedSecretName := "elitegate/production/projects/11111111-1111-1111-1111-111111111111/jwt/hs256"
+	assert.Equal(t, expectedSecretName, secrets.restoredID)
+	assert.Equal(t, expectedSecretName, secrets.updatedID)
+
+	assert.Equal(t, "version-restored-1", cfg.SecretVersionID)
+	assert.Equal(t, "arn:aws:secretsmanager:ap-south-1:123456789012:secret:restored", cfg.SecretARN)
+}
