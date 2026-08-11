@@ -150,6 +150,11 @@ type CustomDomainRepository interface {
 		id uuid.UUID,
 		projectID uuid.UUID,
 	) (*domain.CustomDomain, error)
+
+	GetActiveProjectGatewayIngress(
+		ctx context.Context,
+		projectID uuid.UUID,
+	) (*storage.ProjectGatewayIngress, error)
 }
 
 // DNSResolver represents a DNS resolver capable of querying TXT and CNAME records.
@@ -797,6 +802,22 @@ func (s *CustomDomainService) GetProvisioningStatus(
 		valValue = cd.CertificateValidationValue
 	}
 
+	hostRoutingActive := cd.ListenerRuleARN != nil && strings.TrimSpace(*cd.ListenerRuleARN) != ""
+
+	var gatewayType *string
+	var gatewayExternalID *string
+
+	if hostRoutingActive {
+		gType := "dedicated"
+		gatewayType = &gType
+
+		gwIngress, err := s.repo.GetActiveProjectGatewayIngress(ctx, projectID)
+		if err == nil && gwIngress != nil && strings.TrimSpace(gwIngress.ExternalID) != "" {
+			extID := strings.TrimSpace(gwIngress.ExternalID)
+			gatewayExternalID = &extID
+		}
+	}
+
 	return &domain.ProvisioningStatusResponse{
 		ID:                         cd.ID,
 		Hostname:                   cd.Hostname,
@@ -812,6 +833,9 @@ func (s *CustomDomainService) GetProvisioningStatus(
 		CertificateIssuedAt:        cd.CertificateIssuedAt,
 		CertificateAttachedAt:      cd.CertificateAttachedAt,
 		ActivatedAt:                cd.ActivatedAt,
+		GatewayExternalID:          gatewayExternalID,
+		GatewayType:                gatewayType,
+		HostRoutingActive:          hostRoutingActive,
 	}, nil
 }
 

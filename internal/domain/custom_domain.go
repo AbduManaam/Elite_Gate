@@ -68,6 +68,9 @@ type ProvisioningStatusResponse struct {
 	CertificateIssuedAt        *time.Time `json:"certificateIssuedAt,omitempty"`
 	CertificateAttachedAt      *time.Time `json:"certificateAttachedAt,omitempty"`
 	ActivatedAt                *time.Time `json:"activatedAt,omitempty"`
+	GatewayExternalID          *string    `json:"gatewayExternalId,omitempty"`
+	GatewayType                *string    `json:"gatewayType,omitempty"`
+	HostRoutingActive          bool       `json:"hostRoutingActive"`
 }
 
 // CustomDomain represents a custom domain entity in the system.

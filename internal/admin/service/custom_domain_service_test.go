@@ -39,6 +39,18 @@ type fakeCustomDomainRepo struct {
 	domains           map[string]*domain.CustomDomain
 	getByIDError      error
 	markVerifiedError error
+	gatewayIngress    *storage.ProjectGatewayIngress
+	gatewayIngressErr error
+}
+
+func (f *fakeCustomDomainRepo) GetActiveProjectGatewayIngress(ctx context.Context, projectID uuid.UUID) (*storage.ProjectGatewayIngress, error) {
+	if f.gatewayIngressErr != nil {
+		return nil, f.gatewayIngressErr
+	}
+	if f.gatewayIngress != nil {
+		return f.gatewayIngress, nil
+	}
+	return nil, storage.ErrProjectGatewayIngressNotReady
 }
 
 func newFakeCustomDomainRepo() *fakeCustomDomainRepo {
@@ -1234,4 +1246,88 @@ func TestRetryProvisioning_SmartResume(t *testing.T) {
 	retried, err := svc.RetryProvisioning(context.Background(), projectID, d.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ProvisioningStatusAttachingCertificate, retried.ProvisioningStatus)
+}
+
+func TestGetProvisioningStatus_GatewayRouting_Test1_ActiveWithListenerRuleAndGateway(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	ruleARN := "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener-rule/app/alb/123/456/789"
+	gwID := "gw_test123"
+
+	repo.gatewayIngress = &storage.ProjectGatewayIngress{
+		ExternalID:     gwID,
+		TargetGroupARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg/123",
+	}
+
+	d := &domain.CustomDomain{
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "app.example.com",
+		Status:             domain.CustomDomainStatusActive,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusCompleted,
+		ListenerRuleARN:    &ruleARN,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	status, err := svc.GetProvisioningStatus(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.True(t, status.HostRoutingActive)
+	require.NotNil(t, status.GatewayType)
+	assert.Equal(t, "dedicated", *status.GatewayType)
+	require.NotNil(t, status.GatewayExternalID)
+	assert.Equal(t, "gw_test123", *status.GatewayExternalID)
+}
+
+func TestGetProvisioningStatus_GatewayRouting_Test2_NoListenerRuleARN(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+
+	d := &domain.CustomDomain{
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "app.example.com",
+		Status:             domain.CustomDomainStatusVerified,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusRequestingCertificate,
+		ListenerRuleARN:    nil,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	status, err := svc.GetProvisioningStatus(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.False(t, status.HostRoutingActive)
+	assert.Nil(t, status.GatewayExternalID)
+}
+
+func TestGetProvisioningStatus_GatewayRouting_Test3_ListenerRuleARNExistsButGatewayUnresolvable(t *testing.T) {
+	logger := zerolog.Nop()
+	repo := newFakeCustomDomainRepo()
+	projectID := uuid.New()
+	ruleARN := "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener-rule/app/alb/123/456/789"
+
+	repo.gatewayIngressErr = errors.New("database connection failed")
+
+	d := &domain.CustomDomain{
+		ID:                 uuid.New(),
+		ProjectID:          projectID,
+		Hostname:           "app.example.com",
+		Status:             domain.CustomDomainStatusActive,
+		RoutingStatus:      domain.CustomDomainRoutingStatusReady,
+		ProvisioningStatus: domain.ProvisioningStatusCompleted,
+		ListenerRuleARN:    &ruleARN,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	svc := NewCustomDomainServiceWithAutomation(repo, nil, "gateway.elitegateway.site", true, logger)
+	status, err := svc.GetProvisioningStatus(context.Background(), projectID, d.ID)
+	require.NoError(t, err)
+	assert.True(t, status.HostRoutingActive)
+	require.NotNil(t, status.GatewayType)
+	assert.Equal(t, "dedicated", *status.GatewayType)
+	assert.Nil(t, status.GatewayExternalID)
 }
