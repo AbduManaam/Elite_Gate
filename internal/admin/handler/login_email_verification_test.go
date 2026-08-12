@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ type mockLoginAuthRepo struct {
 	calledIncrementFailure   bool
 	calledCreateRefreshToken bool
 	calledLockUser           bool
+	lastIncrementedUsername  string
+	lastLockedUsername       string
 }
 
 func newMockLoginAuthRepo() *mockLoginAuthRepo {
@@ -47,7 +50,7 @@ func (m *mockLoginAuthRepo) FindAdminUserByUsername(ctx context.Context, usernam
 }
 func (m *mockLoginAuthRepo) FindAdminUserByEmail(ctx context.Context, email string) (*model.AdminUser, error) {
 	for _, u := range m.users {
-		if u.Email == email {
+		if strings.EqualFold(u.Email, email) {
 			return u, nil
 		}
 	}
@@ -102,10 +105,12 @@ func (m *mockLoginAuthRepo) ResetPasswordTx(ctx context.Context, resetTokenID, a
 }
 func (m *mockLoginAuthRepo) IncrementAdminLoginFailure(ctx context.Context, username string) error {
 	m.calledIncrementFailure = true
+	m.lastIncrementedUsername = username
 	return nil
 }
 func (m *mockLoginAuthRepo) LockAdminUser(ctx context.Context, username string, until time.Time) error {
 	m.calledLockUser = true
+	m.lastLockedUsername = username
 	return nil
 }
 func (m *mockLoginAuthRepo) UpdateAdminLoginSuccess(ctx context.Context, userID string) error {
@@ -254,6 +259,241 @@ func TestLoginEmailVerification(t *testing.T) {
 		assert.True(t, foundCookie, "refresh cookie must be set for verified user")
 	})
 
+	t.Run("valid email + correct password logs in successfully", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		repo.users["email_user"] = &model.AdminUser{
+			ID:            "usr_email",
+			Username:      "email_user",
+			Email:         "user@example.com",
+			PasswordHash:  validPwdHash,
+			EmailVerified: true,
+		}
+
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(5, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "user@example.com",
+			"password": password,
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var resp map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.NotEmpty(t, resp["access_token"])
+		assert.True(t, repo.calledUpdateSuccess)
+		assert.True(t, repo.calledCreateRefreshToken)
+	})
+
+	t.Run("mixed-case email + correct password logs in successfully (case-normalized)", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		repo.users["cased_user"] = &model.AdminUser{
+			ID:            "usr_cased",
+			Username:      "cased_user",
+			Email:         "User@Example.com",
+			PasswordHash:  validPwdHash,
+			EmailVerified: true,
+		}
+
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(5, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "USER@EXAMPLE.COM",
+			"password": password,
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var resp map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.NotEmpty(t, resp["access_token"])
+		assert.True(t, repo.calledUpdateSuccess)
+	})
+
+	t.Run("wrong password on email login returns generic 401 and updates failure counter for canonical username", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		repo.users["email_user"] = &model.AdminUser{
+			ID:            "usr_email",
+			Username:      "email_user",
+			Email:         "user@example.com",
+			PasswordHash:  validPwdHash,
+			EmailVerified: true,
+		}
+
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(5, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "user@example.com",
+			"password": "WrongPassword123!",
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		var resp map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.Equal(t, "invalid username or password", resp["error"])
+		assert.True(t, repo.calledIncrementFailure)
+		assert.Equal(t, "email_user", repo.lastIncrementedUsername, "must increment failure for canonical username")
+	})
+
+	t.Run("unverified email account returning 403 EMAIL_NOT_VERIFIED on email login", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		repo.users["email_unverified"] = &model.AdminUser{
+			ID:            "usr_email_unverified",
+			Username:      "email_unverified",
+			Email:         "unverified_email@example.com",
+			PasswordHash:  validPwdHash,
+			EmailVerified: false,
+		}
+
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(5, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "unverified_email@example.com",
+			"password": password,
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+
+		var resp map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.Equal(t, "EMAIL_NOT_VERIFIED", resp["code"])
+		assert.Equal(t, "Please verify your email before signing in.", resp["error"])
+		assert.Nil(t, resp["access_token"])
+	})
+
+	t.Run("unknown email returns generic 401", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(5, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "unknown@example.com",
+			"password": password,
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		var resp map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.Equal(t, "invalid username or password", resp["error"])
+		assert.Nil(t, resp["code"])
+	})
+
 	t.Run("wrong password on unverified account returns generic 401, NOT EMAIL_NOT_VERIFIED", func(t *testing.T) {
 		repo := newMockLoginAuthRepo()
 		repo.users["unverified_user"] = &model.AdminUser{
@@ -341,5 +581,49 @@ func TestLoginEmailVerification(t *testing.T) {
 
 		assert.Equal(t, "invalid username or password", resp["error"])
 		assert.Nil(t, resp["code"])
+	})
+
+	t.Run("account lockout occurs on 5th failed password attempt with email identifier", func(t *testing.T) {
+		repo := newMockLoginAuthRepo()
+		repo.users["lockout_user"] = &model.AdminUser{
+			ID:                  "usr_lockout",
+			Username:            "lockout_user",
+			Email:               "lockout@example.com",
+			PasswordHash:        validPwdHash,
+			EmailVerified:       true,
+			FailedLoginAttempts: 4, // 5th failure will trigger lock
+		}
+
+		tokens, err := authpkg.NewAdminTokenManager("supersecretjwtkey_32byteslongkey!", "test")
+		require.NoError(t, err)
+
+		h := handler.NewAuthHandler(
+			repo,
+			tokens,
+			adminmw.NewLoginRateLimiter(100, 60),
+			nil,
+			"http://localhost:5173/reset-password",
+			"http://localhost:5173/verify-email",
+			zerolog.Nop(),
+			false,
+		)
+
+		r := gin.New()
+		r.POST("/admin/login", h.Login)
+
+		body := map[string]string{
+			"username": "lockout@example.com",
+			"password": "WrongPassword123!",
+		}
+		jsonBody, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/admin/login", bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.True(t, repo.calledLockUser, "LockAdminUser must be called on 5th failure")
+		assert.Equal(t, "lockout_user", repo.lastLockedUsername, "LockAdminUser must lock canonical username")
 	})
 }

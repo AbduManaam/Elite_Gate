@@ -201,10 +201,30 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.repo.FindAdminUserByUsername(
-		c.Request.Context(),
-		req.Username,
+	identifier := strings.TrimSpace(req.Username)
+
+	var (
+		user *model.AdminUser
+		err  error
 	)
+
+	if strings.Contains(identifier, "@") {
+		user, err = h.repo.FindAdminUserByEmail(
+			c.Request.Context(),
+			strings.ToLower(identifier),
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			user, err = h.repo.FindAdminUserByUsername(
+				c.Request.Context(),
+				identifier,
+			)
+		}
+	} else {
+		user, err = h.repo.FindAdminUserByUsername(
+			c.Request.Context(),
+			identifier,
+		)
+	}
 
 	if errors.Is(err, sql.ErrNoRows) {
 		h.limiter.RecordFailure(ip)
@@ -242,7 +262,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 		_ = h.repo.IncrementAdminLoginFailure(
 			c.Request.Context(),
-			req.Username,
+			user.Username,
 		)
 
 		h.limiter.RecordFailure(ip)
@@ -252,12 +272,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 			_ = h.repo.LockAdminUser(
 				c.Request.Context(),
-				req.Username,
+				user.Username,
 				until,
 			)
 
 			h.logger.Warn().
-				Str("username", req.Username).
+				Str("username", user.Username).
 				Str("ip", ip).
 				Time("until", until).
 				Msg("admin locked")
