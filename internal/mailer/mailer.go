@@ -8,4 +8,10 @@ type Mailer interface {
 		recipient string,
 		resetURL string,
 	) error
+
+	SendEmailVerification(
+		ctx context.Context,
+		recipient string,
+		verificationURL string,
+	) error
 }

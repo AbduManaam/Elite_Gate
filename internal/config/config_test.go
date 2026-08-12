@@ -266,3 +266,129 @@ func TestLoadConfigForService_DevelopmentMailValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestEmailVerificationURL_ConfigurationAndValidation(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("EMAIL_VERIFICATION_URL")
+		os.Unsetenv("PASSWORD_RESET_URL")
+		os.Unsetenv("APP_ENV")
+		os.Unsetenv("SMTP_ENABLED")
+		os.Unsetenv("SMTP_HOST")
+		os.Unsetenv("SMTP_PORT")
+		os.Unsetenv("SMTP_FROM_EMAIL")
+	}()
+
+	// 1. Default development URL is http://localhost:5173/verify-email
+	os.Unsetenv("EMAIL_VERIFICATION_URL")
+	os.Setenv("APP_ENV", "development")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.Mail.EmailVerificationURL != "http://localhost:5173/verify-email" {
+		t.Errorf("expected default email verification URL to be 'http://localhost:5173/verify-email', got %q", cfg.Mail.EmailVerificationURL)
+	}
+
+	// 2. EMAIL_VERIFICATION_URL overrides the default
+	overrideURL := "http://custom-dev:3000/verify"
+	os.Setenv("EMAIL_VERIFICATION_URL", overrideURL)
+	cfgOverride, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config with EMAIL_VERIFICATION_URL override: %v", err)
+	}
+	if cfgOverride.Mail.EmailVerificationURL != overrideURL {
+		t.Errorf("expected EmailVerificationURL to be %q, got %q", overrideURL, cfgOverride.Mail.EmailVerificationURL)
+	}
+
+	// 3. Valid HTTPS verification URL works in production
+	os.Setenv("APP_ENV", "production")
+	os.Setenv("SMTP_ENABLED", "true")
+	os.Setenv("SMTP_HOST", "smtp.example.com")
+	os.Setenv("SMTP_PORT", "587")
+	os.Setenv("SMTP_FROM_EMAIL", "noreply@example.com")
+	os.Setenv("PASSWORD_RESET_URL", "https://elitegateway.site/reset-password")
+	os.Setenv("EMAIL_VERIFICATION_URL", "https://elitegateway.site/verify-email")
+	cfgProd, err := LoadConfigForService(ServiceAdmin)
+	if err != nil {
+		t.Fatalf("expected valid HTTPS email verification URL in production to succeed, got error: %v", err)
+	}
+	if cfgProd.Mail.EmailVerificationURL != "https://elitegateway.site/verify-email" {
+		t.Errorf("expected production EmailVerificationURL to match set value, got %q", cfgProd.Mail.EmailVerificationURL)
+	}
+
+	// 4. HTTP verification URL is rejected in production
+	os.Setenv("EMAIL_VERIFICATION_URL", "http://elitegateway.site/verify-email")
+	_, err = LoadConfigForService(ServiceAdmin)
+	if err == nil {
+		t.Fatal("expected error when email verification URL uses HTTP in production")
+	}
+
+	// 5. Malformed verification URL is rejected
+	os.Setenv("APP_ENV", "development")
+	os.Setenv("EMAIL_VERIFICATION_URL", "not-a-valid-url")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("expected error when email verification URL is malformed")
+	}
+
+	// 6. Existing PASSWORD_RESET_URL behavior remains unchanged
+	os.Setenv("EMAIL_VERIFICATION_URL", "http://localhost:5173/verify-email")
+	os.Setenv("PASSWORD_RESET_URL", "not-a-valid-url")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("expected error when password reset URL is malformed")
+	}
+}
+
+func TestResendVerificationRPM_ConfigurationAndValidation(t *testing.T) {
+	origWd, err := os.Getwd()
+	if err == nil {
+		_ = os.Chdir("../..")
+		defer os.Chdir(origWd)
+	}
+
+	os.Setenv("POSTGRES_DSN", "postgres://localhost/test")
+	os.Setenv("JWT_SECRET", "supersecretjwtkey_32byteslongkey!")
+	defer func() {
+		os.Unsetenv("POSTGRES_DSN")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM")
+	}()
+
+	// 1. Default resend_verification_rpm is 3
+	os.Unsetenv("RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.RateLimit.Auth.ResendVerificationRPM != 3 {
+		t.Errorf("expected default ResendVerificationRPM to be 3, got %d", cfg.RateLimit.Auth.ResendVerificationRPM)
+	}
+
+	// 2. Env var override works
+	os.Setenv("RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM", "10")
+	cfgOverride, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load config with RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM: %v", err)
+	}
+	if cfgOverride.RateLimit.Auth.ResendVerificationRPM != 10 {
+		t.Errorf("expected ResendVerificationRPM to be 10, got %d", cfgOverride.RateLimit.Auth.ResendVerificationRPM)
+	}
+
+	// 3. Invalid RPM <= 0 rejected
+	os.Setenv("RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM", "0")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("expected error when RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM is 0")
+	}
+}

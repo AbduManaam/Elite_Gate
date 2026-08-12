@@ -59,7 +59,7 @@ func (m *mockAuthRepo) LinkGoogleAccount(ctx context.Context, userID, googleID, 
 	return nil
 }
 
-func (m *mockAuthRepo) SignupTx(ctx context.Context, username, email, passwordHash, companyName, slug, plan string) (*storage.SignupResult, error) {
+func (m *mockAuthRepo) SignupTx(ctx context.Context, username, email, passwordHash, companyName, slug, plan string, verificationTokenHash string, verificationExpiresAt time.Time) (*storage.SignupResult, error) {
 	return nil, nil
 }
 
@@ -76,6 +76,22 @@ func (m *mockAuthRepo) InvalidatePasswordResetTokenByID(ctx context.Context, tok
 	m.invalidateByIDCalls++
 	m.invalidationContextErr = ctx.Err()
 	return nil
+}
+
+func (m *mockAuthRepo) InvalidateEmailVerificationTokenByID(ctx context.Context, tokenID string) error {
+	return nil
+}
+
+func (m *mockAuthRepo) FindValidEmailVerificationToken(ctx context.Context, tokenHash string) (*model.EmailVerificationToken, error) {
+	return nil, storage.ErrInvalidEmailVerificationToken
+}
+
+func (m *mockAuthRepo) VerifyEmailTx(ctx context.Context, tokenHash string) error {
+	return nil
+}
+
+func (m *mockAuthRepo) ReplaceEmailVerificationTokenTx(ctx context.Context, adminUserID, tokenHash string, expiresAt time.Time) (string, error) {
+	return "mock-verif-token-id", nil
 }
 
 func (m *mockAuthRepo) FindValidPasswordResetToken(ctx context.Context, tokenHash string) (*model.PasswordResetToken, error) {
@@ -123,9 +139,10 @@ func (m *mockAuthRepo) IsSuperAdmin(ctx context.Context, userID string) (bool, e
 }
 
 type mockMailer struct {
-	sentRecipient string
-	sentResetURL  string
-	shouldFail    bool
+	sentRecipient       string
+	sentResetURL        string
+	sentVerificationURL string
+	shouldFail          bool
 }
 
 func (m *mockMailer) SendPasswordReset(ctx context.Context, recipient, resetURL string) error {
@@ -137,6 +154,15 @@ func (m *mockMailer) SendPasswordReset(ctx context.Context, recipient, resetURL 
 	return nil
 }
 
+func (m *mockMailer) SendEmailVerification(ctx context.Context, recipient, verificationURL string) error {
+	if m.shouldFail {
+		return assert.AnError
+	}
+	m.sentRecipient = recipient
+	m.sentVerificationURL = verificationURL
+	return nil
+}
+
 func TestForgotPasswordHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -144,7 +170,7 @@ func TestForgotPasswordHandler(t *testing.T) {
 		repo := &mockAuthRepo{user: nil}
 		mailer := &mockMailer{}
 		limiter := middleware.NewLoginRateLimiter(5, 60)
-		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", zerolog.Nop(), false)
+		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", "http://localhost:5173/verify-email", zerolog.Nop(), false)
 
 		r := gin.New()
 		r.POST("/forgot-password", h.ForgotPassword)
@@ -173,7 +199,7 @@ func TestForgotPasswordHandler(t *testing.T) {
 		repo := &mockAuthRepo{user: syntheticUser}
 		mailer := &mockMailer{}
 		limiter := middleware.NewLoginRateLimiter(5, 60)
-		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", zerolog.Nop(), false)
+		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", "http://localhost:5173/verify-email", zerolog.Nop(), false)
 
 		r := gin.New()
 		r.POST("/forgot-password", h.ForgotPassword)
@@ -202,7 +228,7 @@ func TestForgotPasswordHandler(t *testing.T) {
 		repo := &mockAuthRepo{user: validUser}
 		mailer := &mockMailer{shouldFail: true}
 		limiter := middleware.NewLoginRateLimiter(5, 60)
-		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", zerolog.Nop(), false)
+		h := handler.NewAuthHandler(repo, nil, limiter, mailer, "http://localhost:5173/reset-password", "http://localhost:5173/verify-email", zerolog.Nop(), false)
 
 		r := gin.New()
 		r.POST("/forgot-password", h.ForgotPassword)

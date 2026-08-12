@@ -76,24 +76,26 @@ type AuthConfig struct {
 }
 
 type MailConfig struct {
-	Enabled          bool   `mapstructure:"enabled"`
-	Host             string `mapstructure:"host"`
-	Port             int    `mapstructure:"port"`
-	Username         string `mapstructure:"username"`
-	Password         string `mapstructure:"password"`
-	FromEmail        string `mapstructure:"from_email"`
-	FromName         string `mapstructure:"from_name"`
-	PasswordResetURL string `mapstructure:"password_reset_url"`
-	TLSMode          string `mapstructure:"tls_mode"` // "starttls", "implicit", "none"
+	Enabled              bool   `mapstructure:"enabled"`
+	Host                 string `mapstructure:"host"`
+	Port                 int    `mapstructure:"port"`
+	Username             string `mapstructure:"username"`
+	Password             string `mapstructure:"password"`
+	FromEmail            string `mapstructure:"from_email"`
+	FromName             string `mapstructure:"from_name"`
+	PasswordResetURL     string `mapstructure:"password_reset_url"`
+	EmailVerificationURL string `mapstructure:"email_verification_url"`
+	TLSMode              string `mapstructure:"tls_mode"` // "starttls", "implicit", "none"
 }
 
 type AuthRateLimitConfig struct {
-	LoginRPM          int `mapstructure:"login_rpm"`
-	RefreshRPM        int `mapstructure:"refresh_rpm"`
-	OAuthCallbackRPM  int `mapstructure:"oauth_callback_rpm"`
-	SignupRPM         int `mapstructure:"signup_rpm"`
-	ForgotPasswordRPM int `mapstructure:"forgot_password_rpm"`
-	ResetPasswordRPM  int `mapstructure:"reset_password_rpm"`
+	LoginRPM              int `mapstructure:"login_rpm"`
+	RefreshRPM            int `mapstructure:"refresh_rpm"`
+	OAuthCallbackRPM      int `mapstructure:"oauth_callback_rpm"`
+	SignupRPM             int `mapstructure:"signup_rpm"`
+	ForgotPasswordRPM     int `mapstructure:"forgot_password_rpm"`
+	ResetPasswordRPM      int `mapstructure:"reset_password_rpm"`
+	ResendVerificationRPM int `mapstructure:"resend_verification_rpm"`
 }
 
 type RateLimitConfig struct {
@@ -148,10 +150,13 @@ func LoadConfigForService(service ServiceType) (*Config, error) {
 		return nil, err
 	}
 
-	// 1. Load .env file variables into runtime env if it exists
+	// 1. Reset Viper instance to ensure clean configuration state per invocation
+	viper.Reset()
+
+	// 2. Load .env file variables into runtime env if it exists
 	_ = gotenv.Load()
 
-	// 2. Setup Viper and config defaults
+	// 3. Setup Viper and config defaults
 	viper.SetConfigFile("internal/config/config.yaml")
 
 	viper.SetDefault("server.port", ":8080")
@@ -178,11 +183,13 @@ func LoadConfigForService(service ServiceType) (*Config, error) {
 	viper.SetDefault("rate_limit.auth.signup_rpm", 5)
 	viper.SetDefault("rate_limit.auth.forgot_password_rpm", 5)
 	viper.SetDefault("rate_limit.auth.reset_password_rpm", 10)
+	viper.SetDefault("rate_limit.auth.resend_verification_rpm", 3)
 	viper.SetDefault("mail.enabled", false)
 	viper.SetDefault("mail.port", 587)
 	viper.SetDefault("mail.from_name", "Elite Gateway")
 	viper.SetDefault("mail.tls_mode", "starttls")
 	viper.SetDefault("mail.password_reset_url", "http://localhost:5173/reset-password")
+	viper.SetDefault("mail.email_verification_url", "http://localhost:5173/verify-email")
 	viper.SetDefault("aws.automation_enabled", false)
 	viper.SetDefault("aws.region", "ap-south-1")
 	viper.SetDefault("app_env", "development")
@@ -225,6 +232,7 @@ func LoadConfigForService(service ServiceType) (*Config, error) {
 	viper.BindEnv("rate_limit.auth.signup_rpm", "RATE_LIMIT_AUTH_SIGNUP_RPM")
 	viper.BindEnv("rate_limit.auth.forgot_password_rpm", "RATE_LIMIT_AUTH_FORGOT_PASSWORD_RPM")
 	viper.BindEnv("rate_limit.auth.reset_password_rpm", "RATE_LIMIT_AUTH_RESET_PASSWORD_RPM")
+	viper.BindEnv("rate_limit.auth.resend_verification_rpm", "RATE_LIMIT_AUTH_RESEND_VERIFICATION_RPM")
 	viper.BindEnv("server.prometheus_url", "PROMETHEUS_URL")
 	viper.BindEnv("server.metrics_cache_ttl", "METRICS_CACHE_TTL")
 	viper.BindEnv("google_oauth.client_id", "GOOGLE_CLIENT_ID")
@@ -241,6 +249,7 @@ func LoadConfigForService(service ServiceType) (*Config, error) {
 	viper.BindEnv("mail.from_name", "SMTP_FROM_NAME")
 	viper.BindEnv("mail.tls_mode", "SMTP_TLS_MODE")
 	viper.BindEnv("mail.password_reset_url", "PASSWORD_RESET_URL")
+	viper.BindEnv("mail.email_verification_url", "EMAIL_VERIFICATION_URL")
 	viper.BindEnv("aws.automation_enabled", "CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED")
 	viper.BindEnv("aws.region", "AWS_REGION")
 	viper.BindEnv("aws.alb_https_listener_arn", "ALB_HTTPS_LISTENER_ARN")
@@ -294,6 +303,15 @@ func LoadConfigForService(service ServiceType) (*Config, error) {
 	if cfg.RateLimit.RequestsPerMinute <= 0 {
 		return nil, errors.New("rate_limit.requests_per_minute must be > 0")
 	}
+	if cfg.RateLimit.Auth.LoginRPM <= 0 ||
+		cfg.RateLimit.Auth.RefreshRPM <= 0 ||
+		cfg.RateLimit.Auth.OAuthCallbackRPM <= 0 ||
+		cfg.RateLimit.Auth.SignupRPM <= 0 ||
+		cfg.RateLimit.Auth.ForgotPasswordRPM <= 0 ||
+		cfg.RateLimit.Auth.ResetPasswordRPM <= 0 ||
+		cfg.RateLimit.Auth.ResendVerificationRPM <= 0 {
+		return nil, errors.New("rate_limit.auth RPM values must be > 0")
+	}
 	if len(cfg.Server.AllowedOrigins) == 0 {
 		return nil, errors.New("server.allowed_origins must have at least one entry")
 	}
@@ -341,21 +359,25 @@ func validateAWSConfig(cfg AWSConfig) error {
 	return nil
 }
 
-func validatePasswordResetURL(rawURL string, production bool) error {
+func validateMailURL(name, rawURL string, production bool) error {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid password reset URL: %w", err)
+		return fmt.Errorf("invalid %s URL: %w", name, err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("password reset URL must use http or https")
+		return fmt.Errorf("%s URL must use http or https", name)
 	}
 	if parsed.Host == "" {
-		return fmt.Errorf("password reset URL must contain a host")
+		return fmt.Errorf("%s URL must contain a host", name)
 	}
 	if production && parsed.Scheme != "https" {
-		return fmt.Errorf("password reset URL must use HTTPS in production")
+		return fmt.Errorf("%s URL must use HTTPS in production", name)
 	}
 	return nil
+}
+
+func validatePasswordResetURL(rawURL string, production bool) error {
+	return validateMailURL("password reset", rawURL, production)
 }
 
 func validateMailConfig(cfg MailConfig, production bool, service ServiceType) error {
@@ -399,7 +421,11 @@ func validateMailConfig(cfg MailConfig, production bool, service ServiceType) er
 		return fmt.Errorf("unsupported smtp.tls_mode: %q", cfg.TLSMode)
 	}
 
-	return validatePasswordResetURL(cfg.PasswordResetURL, production)
+	if err := validatePasswordResetURL(cfg.PasswordResetURL, production); err != nil {
+		return err
+	}
+
+	return validateMailURL("email verification", cfg.EmailVerificationURL, production)
 }
 
 func validateDuration(name, raw string) error {

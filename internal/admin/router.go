@@ -96,6 +96,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 		loginLimiter,
 		mailClient,
 		cfg.Mail.PasswordResetURL,
+		cfg.Mail.EmailVerificationURL,
 		logger,
 		cfg.AppEnv == "production",
 	)
@@ -226,6 +227,7 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	signupRPM := cfg.RateLimit.Auth.SignupRPM
 	forgotPasswordRPM := cfg.RateLimit.Auth.ForgotPasswordRPM
 	resetPasswordRPM := cfg.RateLimit.Auth.ResetPasswordRPM
+	resendVerificationRPM := cfg.RateLimit.Auth.ResendVerificationRPM
 	trustProxy := cfg.Server.TrustProxyHeaders
 
 	// Instantiate memory limiters for public endpoints
@@ -244,6 +246,9 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	resetIPLimiter := ratelimit.NewMemoryLimiter(resetPasswordRPM)
 	resetIPLimiter.StartCleanup(context.Background(), time.Minute)
 
+	resendVerificationIPLimiter := ratelimit.NewMemoryLimiter(resendVerificationRPM)
+	resendVerificationIPLimiter.StartCleanup(context.Background(), time.Minute)
+
 	adminGroup := r.Group("/admin")
 	if ipAllowlist != nil {
 		adminGroup.Use(ipAllowlist)
@@ -254,6 +259,8 @@ func NewRouter(logger zerolog.Logger, db *sql.DB, cfg *config.Config, containerM
 	adminGroup.POST("/logout", authHandler.Logout)
 	adminGroup.POST("/forgot-password", middleware.IPRateLimit(forgotIPLimiter, forgotPasswordRPM, "forgot-password", trustProxy), authHandler.ForgotPassword)
 	adminGroup.POST("/reset-password", middleware.IPRateLimit(resetIPLimiter, resetPasswordRPM, "reset-password", trustProxy), authHandler.ResetPassword)
+	adminGroup.POST("/verify-email", authHandler.VerifyEmail)
+	adminGroup.POST("/resend-verification", middleware.IPRateLimit(resendVerificationIPLimiter, resendVerificationRPM, "resend-verification", trustProxy), authHandler.ResendVerification)
 
 	// Public bootstrap registration.
 	// Disabled after the first admin account is created.

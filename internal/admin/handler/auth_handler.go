@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	maxLoginFailures      = 5
-	lockoutDuration       = 15 * time.Minute
-	maxAuthBodyBytes      = 1 << 20
-	genericForgotResponse = "If an account exists for that email address, password reset instructions have been sent."
+	maxLoginFailures                  = 5
+	lockoutDuration                   = 15 * time.Minute
+	maxAuthBodyBytes                  = 1 << 20
+	genericForgotResponse             = "If an account exists for that email address, password reset instructions have been sent."
+	genericResendVerificationResponse = "If an unverified account exists for that email, a verification link has been sent."
 )
 
 type AuthRepository interface {
@@ -37,10 +38,14 @@ type AuthRepository interface {
 	FindAdminUserByGoogleID(ctx context.Context, googleID string) (*model.AdminUser, error)
 	CreateAdminUser(ctx context.Context, username, passwordHash string, isSuperAdmin bool) (*model.AdminUser, error)
 	LinkGoogleAccount(ctx context.Context, userID, googleID, avatarURL string) error
-	SignupTx(ctx context.Context, username, email, passwordHash, companyName, slug, plan string) (*storage.SignupResult, error)
+	SignupTx(ctx context.Context, username, email, passwordHash, companyName, slug, plan string, verificationTokenHash string, verificationExpiresAt time.Time) (*storage.SignupResult, error)
 	GoogleSignupTx(ctx context.Context, email, googleID, displayName, avatarURL, companyName, slug string) (*storage.SignupResult, error)
 	ReplacePasswordResetTokenTx(ctx context.Context, adminUserID, tokenHash string, expiresAt time.Time) (string, error)
+	ReplaceEmailVerificationTokenTx(ctx context.Context, adminUserID, tokenHash string, expiresAt time.Time) (string, error)
 	InvalidatePasswordResetTokenByID(ctx context.Context, tokenID string) error
+	InvalidateEmailVerificationTokenByID(ctx context.Context, tokenID string) error
+	FindValidEmailVerificationToken(ctx context.Context, tokenHash string) (*model.EmailVerificationToken, error)
+	VerifyEmailTx(ctx context.Context, tokenHash string) error
 	FindValidPasswordResetToken(ctx context.Context, tokenHash string) (*model.PasswordResetToken, error)
 	ResetPasswordTx(ctx context.Context, resetTokenID, adminUserID, newPasswordHash string) error
 	IncrementAdminLoginFailure(ctx context.Context, username string) error
@@ -55,13 +60,14 @@ type AuthRepository interface {
 }
 
 type AuthHandler struct {
-	repo             AuthRepository
-	tokens           *authpkg.AdminTokenManager
-	limiter          *adminmw.LoginRateLimiter
-	mailer           mailer.Mailer
-	passwordResetURL string
-	logger           zerolog.Logger
-	secureCookies    bool
+	repo                 AuthRepository
+	tokens               *authpkg.AdminTokenManager
+	limiter              *adminmw.LoginRateLimiter
+	mailer               mailer.Mailer
+	passwordResetURL     string
+	emailVerificationURL string
+	logger               zerolog.Logger
+	secureCookies        bool
 
 	oauthState      *authpkg.OAuthStateManager
 	googleOAuth     *authpkg.GoogleOAuth
@@ -74,17 +80,19 @@ func NewAuthHandler(
 	limiter *adminmw.LoginRateLimiter,
 	mailer mailer.Mailer,
 	passwordResetURL string,
+	emailVerificationURL string,
 	logger zerolog.Logger,
 	secureCookies bool,
 ) *AuthHandler {
 	return &AuthHandler{
-		repo:             repo,
-		tokens:           tokens,
-		limiter:          limiter,
-		mailer:           mailer,
-		passwordResetURL: passwordResetURL,
-		logger:           logger,
-		secureCookies:    secureCookies,
+		repo:                 repo,
+		tokens:               tokens,
+		limiter:              limiter,
+		mailer:               mailer,
+		passwordResetURL:     passwordResetURL,
+		emailVerificationURL: emailVerificationURL,
+		logger:               logger,
+		secureCookies:        secureCookies,
 	}
 }
 
@@ -141,6 +149,14 @@ type forgotPasswordRequest struct {
 type resetPasswordRequest struct {
 	Token       string `json:"token" binding:"required"`
 	NewPassword string `json:"new_password" binding:"required"`
+}
+
+type verifyEmailRequest struct {
+	Token string `json:"token" binding:"required"`
+}
+
+type resendVerificationRequest struct {
+	Email string `json:"email" binding:"required,email,max=254"`
 }
 
 func isUniqueViolation(err error) bool {
@@ -249,6 +265,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid username or password",
+		})
+		return
+	}
+
+	if !user.EmailVerified {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Please verify your email before signing in.",
+			"code":  "EMAIL_NOT_VERIFIED",
 		})
 		return
 	}
@@ -449,9 +473,20 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		plan = "free"
 	}
 
+	rawToken, err := authpkg.GenerateEmailVerificationToken()
+	if err != nil {
+		h.logger.Error().Err(err).Str("username", req.Username).Msg("signup: failed to generate email verification token")
+		h.internal(c, err)
+		return
+	}
+
+	verificationTokenHash := authpkg.HashToken(rawToken)
+	expiresAt := time.Now().UTC().Add(authpkg.EmailVerificationTokenTTL)
+
 	result, err := h.repo.SignupTx(
 		c.Request.Context(),
 		req.Username, email, string(hash), req.CompanyName, slug, plan,
+		verificationTokenHash, expiresAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -478,21 +513,49 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		Str("admin_user_id", result.User.ID).
 		Str("project_id", result.Project.ID).
 		Str("company", req.CompanyName).
-		Msg("new tenant self-registered via /signup")
+		Msg("new tenant self-registered via /signup (email verification pending)")
 
-	tokens, err := h.issueTokensForUser(c, result.User.ID, result.User.Username)
+	verificationURL, err := url.Parse(h.emailVerificationURL)
 	if err != nil {
-		h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: token issuance failed")
-		h.internal(c, err)
+		h.logger.Error().Err(err).Msg("signup: failed to parse email verification URL")
+		h.internal(c, errors.New("failed to construct verification URL"))
 		return
 	}
+	q := verificationURL.Query()
+	q.Set("token", rawToken)
+	verificationURL.RawQuery = q.Encode()
 
-	c.JSON(http.StatusCreated, signupResponse{
-		AccessToken: tokens.AccessToken,
-		ExpiresIn:   tokens.ExpiresIn,
-		TokenType:   "Bearer",
-		ProjectID:   result.Project.ID,
+	if h.mailer != nil {
+		if err := h.mailer.SendEmailVerification(
+			c.Request.Context(),
+			result.User.Email,
+			verificationURL.String(),
+		); err != nil {
+			h.logger.Error().Err(err).Str("admin_user_id", result.User.ID).Msg("signup: failed to send email verification")
+			h.invalidateFailedVerificationToken(result.VerificationTokenID, "smtp delivery failed")
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "account created, but verification email could not be sent",
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message":    "Account created. Please check your email to verify your account.",
+		"project_id": result.Project.ID,
 	})
+}
+
+func (h *AuthHandler) invalidateFailedVerificationToken(tokenID, reason string) {
+	if tokenID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := h.repo.InvalidateEmailVerificationTokenByID(ctx, tokenID); err != nil {
+		h.logger.Error().Err(err).Str("token_id", tokenID).Str("reason", reason).Msg("signup: failed to invalidate email verification token after delivery error")
+	}
 }
 
 func (h *AuthHandler) invalidateFailedToken(tokenID, reason string) {
@@ -647,6 +710,108 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	clearRefreshCookie(c, h.secureCookies)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password reset successfully. Sign in using your new password."})
+}
+
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req verifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request format"})
+		return
+	}
+
+	rawToken := strings.TrimSpace(req.Token)
+	if rawToken == "" || len(rawToken) > 1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired verification token"})
+		return
+	}
+
+	tokenHash := authpkg.HashToken(rawToken)
+	err := h.repo.VerifyEmailTx(c.Request.Context(), tokenHash)
+	if errors.Is(err, storage.ErrInvalidEmailVerificationToken) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired verification token"})
+		return
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Msg("verify email: transaction internal failure")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired verification token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully."})
+}
+
+func (h *AuthHandler) ResendVerification(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthBodyBytes)
+
+	var req resendVerificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request format"})
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid email address"})
+		return
+	}
+
+	user, err := h.repo.FindAdminUserByEmail(c.Request.Context(), email)
+	if errors.Is(err, sql.ErrNoRows) || user == nil {
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Msg("resend verification: user lookup failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+
+	if user.EmailVerified {
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+
+	rawToken, err := authpkg.GenerateEmailVerificationToken()
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", user.ID).Msg("resend verification: token generation failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+
+	tokenHash := authpkg.HashToken(rawToken)
+	expiresAt := time.Now().UTC().Add(authpkg.EmailVerificationTokenTTL)
+
+	tokenID, err := h.repo.ReplaceEmailVerificationTokenTx(c.Request.Context(), user.ID, tokenHash, expiresAt)
+	if err != nil {
+		h.logger.Error().Err(err).Str("user_id", user.ID).Msg("resend verification: token replacement tx failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+
+	verificationURL, err := url.Parse(h.emailVerificationURL)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("resend verification: failed to parse verification URL")
+		h.invalidateFailedVerificationToken(tokenID, "url parse failed")
+		c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
+		return
+	}
+	q := verificationURL.Query()
+	q.Set("token", rawToken)
+	verificationURL.RawQuery = q.Encode()
+
+	if h.mailer != nil {
+		mailCtx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		if err := h.mailer.SendEmailVerification(mailCtx, user.Email, verificationURL.String()); err != nil {
+			h.logger.Error().Err(err).Str("user_id", user.ID).Msg("resend verification: send email failed")
+			h.invalidateFailedVerificationToken(tokenID, "smtp delivery failed")
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": genericResendVerificationResponse})
 }
 
 func toSlug(name string) string {

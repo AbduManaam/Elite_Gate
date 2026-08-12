@@ -231,6 +231,7 @@ build_environment_file() {
   local smtp_from_name
   local smtp_tls_mode
   local password_reset_url
+  local email_verification_url
 
   smtp_enabled="$(jq -r '.smtp_enabled' <<<"$smtp_json")"
   smtp_host="$(jq -r '.smtp_host' <<<"$smtp_json")"
@@ -241,6 +242,7 @@ build_environment_file() {
   smtp_from_name="$(jq -r '.smtp_from_name' <<<"$smtp_json")"
   smtp_tls_mode="$(jq -r '.smtp_tls_mode' <<<"$smtp_json")"
   password_reset_url="$(jq -r '.password_reset_url' <<<"$smtp_json")"
+  email_verification_url="$(jq -r '.email_verification_url // "https://elitegateway.site/verify-email"' <<<"$smtp_json")"
 
   local temporary_env
   temporary_env="$(mktemp "${DEPLOY_DIR}/production.env.XXXXXX")"
@@ -280,6 +282,7 @@ SMTP_FROM_EMAIL=${smtp_from_email}
 SMTP_FROM_NAME=${smtp_from_name}
 SMTP_TLS_MODE=${smtp_tls_mode}
 PASSWORD_RESET_URL=${password_reset_url}
+EMAIL_VERIFICATION_URL=${email_verification_url}
 GATEWAY_IMAGE_NAME=${GATEWAY_IMAGE}
 
 CUSTOM_DOMAIN_AWS_AUTOMATION_ENABLED=${automation_enabled}

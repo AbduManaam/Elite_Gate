@@ -39,3 +39,8 @@ rate_limit:
     refresh_rpm: 30
     oauth_callback_rpm: 10
     signup_rpm: 5
+    resend_verification_rpm: 3
+
+mail:
+  password_reset_url: "http://localhost:5173/reset-password"
+  email_verification_url: "http://localhost:5173/verify-email"

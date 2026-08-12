@@ -20,6 +20,8 @@ type SMTPConfig struct {
 	Production bool
 }
 
+var _ Mailer = (*SMTPMailer)(nil)
+
 type SMTPMailer struct {
 	cfg    SMTPConfig
 	client *gomail.Client
@@ -78,20 +80,37 @@ func NewSMTPMailer(cfg SMTPConfig) (*SMTPMailer, error) {
 }
 
 func (m *SMTPMailer) SendPasswordReset(ctx context.Context, recipient, resetURL string) error {
+	msg := buildPasswordResetMsg(
+		mail.Address{Name: m.cfg.FromName, Address: m.cfg.FromEmail},
+		recipient,
+		resetURL,
+	)
+
+	if err := m.client.DialAndSendWithContext(ctx, msg); err != nil {
+		return fmt.Errorf("send password reset email: %w", err)
+	}
+
+	return nil
+}
+
+func (m *SMTPMailer) SendEmailVerification(ctx context.Context, recipient, verificationURL string) error {
+	msg := buildEmailVerificationMsg(
+		mail.Address{Name: m.cfg.FromName, Address: m.cfg.FromEmail},
+		recipient,
+		verificationURL,
+	)
+
+	if err := m.client.DialAndSendWithContext(ctx, msg); err != nil {
+		return fmt.Errorf("send email verification email: %w", err)
+	}
+
+	return nil
+}
+
+func buildPasswordResetMsg(fromAddr mail.Address, recipient, resetURL string) *gomail.Msg {
 	msg := gomail.NewMsg()
-
-	fromAddr := mail.Address{
-		Name:    m.cfg.FromName,
-		Address: m.cfg.FromEmail,
-	}
-
-	if err := msg.From(fromAddr.String()); err != nil {
-		return fmt.Errorf("set from header: %w", err)
-	}
-	if err := msg.To(recipient); err != nil {
-		return fmt.Errorf("set to header: %w", err)
-	}
-
+	_ = msg.From(fromAddr.String())
+	_ = msg.To(recipient)
 	msg.Subject("Reset your Elite Gateway password")
 
 	body := fmt.Sprintf(
@@ -99,10 +118,19 @@ func (m *SMTPMailer) SendPasswordReset(ctx context.Context, recipient, resetURL 
 		resetURL,
 	)
 	msg.SetBodyString(gomail.TypeTextPlain, body)
+	return msg
+}
 
-	if err := m.client.DialAndSendWithContext(ctx, msg); err != nil {
-		return fmt.Errorf("send password reset email: %w", err)
-	}
+func buildEmailVerificationMsg(fromAddr mail.Address, recipient, verificationURL string) *gomail.Msg {
+	msg := gomail.NewMsg()
+	_ = msg.From(fromAddr.String())
+	_ = msg.To(recipient)
+	msg.Subject("Verify your Elite Gateway email")
 
-	return nil
+	body := fmt.Sprintf(
+		"Hello,\n\nThanks for creating an Elite Gateway account.\n\nPlease verify your email address using the link below:\n\n%s\n\nThis verification link expires in 30 minutes and can be used only once.\n\nIf you did not create this account, you can ignore this email.\n\nElite Gateway",
+		verificationURL,
+	)
+	msg.SetBodyString(gomail.TypeTextPlain, body)
+	return msg
 }

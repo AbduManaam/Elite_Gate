@@ -37,6 +37,7 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 		google_id,
 		avatar_url,
 		auth_provider,
+		email_verified,
 		failed_login_attempts,
 		locked_until,
 		last_login_at,
@@ -55,6 +56,7 @@ func (r *AdminAuthRepo) FindAdminUserByUsername(
 		&u.GoogleID,
 		&u.AvatarURL,
 		&u.AuthProvider,
+		&u.EmailVerified,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -76,6 +78,7 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 	ctx context.Context,
 	id string,
 ) (*model.AdminUser, error) {
+
 	const q = `
 	SELECT
 		id,
@@ -85,6 +88,7 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 		google_id,
 		avatar_url,
 		auth_provider,
+		email_verified,
 		failed_login_attempts,
 		locked_until,
 		last_login_at,
@@ -103,6 +107,7 @@ func (r *AdminAuthRepo) FindAdminUserByID(
 		&u.GoogleID,
 		&u.AvatarURL,
 		&u.AuthProvider,
+		&u.EmailVerified,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -391,15 +396,47 @@ func (r *AdminAuthRepo) CreateAdminUser(
 ) (*model.AdminUser, error) {
 
 	const q = `
-	INSERT INTO admin_users (username, password_hash, email, is_super_admin, auth_provider)
-	VALUES ($1, $2, $1 || '@elitegate.local', $3, 'password')
+	INSERT INTO admin_users (
+		username,
+		password_hash,
+		email,
+		is_super_admin,
+		auth_provider,
+		email_verified
+	)
+	VALUES (
+		$1,
+		$2,
+		$1 || '@elitegate.local',
+		$3,
+		'password',
+		TRUE
+	)
 	ON CONFLICT (username) DO NOTHING
-	RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
-	          failed_login_attempts, locked_until, last_login_at, created_at
+	RETURNING
+		id,
+		username,
+		email,
+		password_hash,
+		google_id,
+		avatar_url,
+		auth_provider,
+		email_verified,
+		failed_login_attempts,
+		locked_until,
+		last_login_at,
+		created_at
 	`
 
 	var u model.AdminUser
-	err := r.db.QueryRowContext(ctx, q, username, passwordHash, isSuperAdmin).Scan(
+
+	err := r.db.QueryRowContext(
+		ctx,
+		q,
+		username,
+		passwordHash,
+		isSuperAdmin,
+	).Scan(
 		&u.ID,
 		&u.Username,
 		&u.Email,
@@ -407,6 +444,7 @@ func (r *AdminAuthRepo) CreateAdminUser(
 		&u.GoogleID,
 		&u.AvatarURL,
 		&u.AuthProvider,
+		&u.EmailVerified,
 		&u.FailedLoginAttempts,
 		&u.LockedUntil,
 		&u.LastLoginAt,
@@ -414,8 +452,9 @@ func (r *AdminAuthRepo) CreateAdminUser(
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, sql.ErrNoRows // username conflict
+		return nil, sql.ErrNoRows
 	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -453,10 +492,11 @@ func (r *AdminAuthRepo) IsSuperAdmin(ctx context.Context, userID string) (bool, 
 	return flag, nil
 }
 
-// SignupResult holds the admin user and project created atomically by SignupTx.
+// SignupResult holds the admin user, project, and initial verification token ID created atomically by SignupTx.
 type SignupResult struct {
-	User    model.AdminUser
-	Project model.Project
+	User                model.AdminUser
+	Project             model.Project
+	VerificationTokenID string
 }
 
 // SignupTx atomically creates an admin_user, a project, and the owner
@@ -469,28 +509,72 @@ type SignupResult struct {
 func (r *AdminAuthRepo) SignupTx(
 	ctx context.Context,
 	username, email, passwordHash, companyName, slug, plan string,
+	verificationTokenHash string,
+	verificationExpiresAt time.Time,
 ) (*SignupResult, error) {
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("SignupTx: begin transaction: %w", err)
 	}
-	defer tx.Rollback() // no-op if committed; rolls back admin_user on project failure
+	defer tx.Rollback() // no-op if committed; rolls back admin_user on project/token failure
 
 	// ── Step 1: Insert admin_user (is_super_admin=FALSE — tenant, not operator) ──
 	var user model.AdminUser
+
 	const qUser = `
-		INSERT INTO admin_users (username, password_hash, email, is_super_admin, auth_provider)
-		VALUES ($1, $2, $3, FALSE, 'password')
-		RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
-		          failed_login_attempts, locked_until, last_login_at, created_at
+		INSERT INTO admin_users (
+			username,
+			password_hash,
+			email,
+			is_super_admin,
+			auth_provider,
+			email_verified
+		)
+		VALUES (
+			$1,
+			$2,
+			$3,
+			FALSE,
+			'password',
+			FALSE
+		)
+		RETURNING
+			id,
+			username,
+			email,
+			password_hash,
+			google_id,
+			avatar_url,
+			auth_provider,
+			email_verified,
+			failed_login_attempts,
+			locked_until,
+			last_login_at,
+			created_at
 	`
-	err = tx.QueryRowContext(ctx, qUser, username, passwordHash, email).Scan(
-		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.GoogleID, &user.AvatarURL, &user.AuthProvider,
-		&user.FailedLoginAttempts, &user.LockedUntil,
-		&user.LastLoginAt, &user.CreatedAt,
+
+	err = tx.QueryRowContext(
+		ctx,
+		qUser,
+		username,
+		passwordHash,
+		email,
+	).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.GoogleID,
+		&user.AvatarURL,
+		&user.AuthProvider,
+		&user.EmailVerified,
+		&user.FailedLoginAttempts,
+		&user.LockedUntil,
+		&user.LastLoginAt,
+		&user.CreatedAt,
 	)
+
 	if err != nil {
 		return nil, fmt.Errorf("SignupTx: insert admin_user: %w", err)
 	}
@@ -539,55 +623,144 @@ func (r *AdminAuthRepo) SignupTx(
 		return nil, fmt.Errorf("SignupTx: insert project_member: %w", err)
 	}
 
-	// ── Commit — all three rows land atomically ───────────────────────────────
+	// ── Step 4: Insert email_verification_token ────────────────────────────────
+	const qToken = `
+		INSERT INTO email_verification_tokens (admin_user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`
+	var verificationTokenID string
+	if err = tx.QueryRowContext(ctx, qToken, user.ID, verificationTokenHash, verificationExpiresAt).Scan(&verificationTokenID); err != nil {
+		return nil, fmt.Errorf("SignupTx: insert email_verification_token: %w", err)
+	}
+
+	// ── Commit — all four rows land atomically ───────────────────────────────
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("SignupTx: commit: %w", err)
 	}
 
-	return &SignupResult{User: user, Project: project}, nil
+	return &SignupResult{User: user, Project: project, VerificationTokenID: verificationTokenID}, nil
 }
 
 // FindAdminUserByGoogleID — Case A: returning Google user.
-func (r *AdminAuthRepo) FindAdminUserByGoogleID(ctx context.Context, googleID string) (*model.AdminUser, error) {
+func (r *AdminAuthRepo) FindAdminUserByGoogleID(
+	ctx context.Context,
+	googleID string,
+) (*model.AdminUser, error) {
+
 	const q = `
-    SELECT id, username, email, password_hash, google_id, avatar_url, auth_provider,
-           failed_login_attempts, locked_until, last_login_at, created_at
-    FROM admin_users WHERE google_id = $1`
+	SELECT
+		id,
+		username,
+		email,
+		password_hash,
+		google_id,
+		avatar_url,
+		auth_provider,
+		email_verified,
+		failed_login_attempts,
+		locked_until,
+		last_login_at,
+		created_at
+	FROM admin_users
+	WHERE google_id = $1
+	`
+
 	var u model.AdminUser
+
 	err := r.db.QueryRowContext(ctx, q, googleID).Scan(
-		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.GoogleID, &u.AvatarURL, &u.AuthProvider,
-		&u.FailedLoginAttempts, &u.LockedUntil, &u.LastLoginAt, &u.CreatedAt,
+		&u.ID,
+		&u.Username,
+		&u.Email,
+		&u.PasswordHash,
+		&u.GoogleID,
+		&u.AvatarURL,
+		&u.AuthProvider,
+		&u.EmailVerified,
+		&u.FailedLoginAttempts,
+		&u.LockedUntil,
+		&u.LastLoginAt,
+		&u.CreatedAt,
 	)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
+
 	return &u, err
 }
 
 // FindAdminUserByEmail — Case B lookup (email is CITEXT: case-insensitive already).
-func (r *AdminAuthRepo) FindAdminUserByEmail(ctx context.Context, email string) (*model.AdminUser, error) {
+func (r *AdminAuthRepo) FindAdminUserByEmail(
+	ctx context.Context,
+	email string,
+) (*model.AdminUser, error) {
+
 	const q = `
-    SELECT id, username, email, password_hash, google_id, avatar_url, auth_provider,
-           failed_login_attempts, locked_until, last_login_at, created_at
-    FROM admin_users WHERE email = $1`
+	SELECT
+		id,
+		username,
+		email,
+		password_hash,
+		google_id,
+		avatar_url,
+		auth_provider,
+		email_verified,
+		failed_login_attempts,
+		locked_until,
+		last_login_at,
+		created_at
+	FROM admin_users
+	WHERE email = $1
+	`
+
 	var u model.AdminUser
+
 	err := r.db.QueryRowContext(ctx, q, email).Scan(
-		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.GoogleID, &u.AvatarURL, &u.AuthProvider,
-		&u.FailedLoginAttempts, &u.LockedUntil, &u.LastLoginAt, &u.CreatedAt,
+		&u.ID,
+		&u.Username,
+		&u.Email,
+		&u.PasswordHash,
+		&u.GoogleID,
+		&u.AvatarURL,
+		&u.AuthProvider,
+		&u.EmailVerified,
+		&u.FailedLoginAttempts,
+		&u.LockedUntil,
+		&u.LastLoginAt,
+		&u.CreatedAt,
 	)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
+
 	return &u, err
 }
 
 // LinkGoogleAccount — Case B: attach a google_id to an existing password account.
-func (r *AdminAuthRepo) LinkGoogleAccount(ctx context.Context, userID, googleID, avatarURL string) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE admin_users SET google_id = $2, avatar_url = COALESCE(NULLIF($3, ''), avatar_url)
-         WHERE id = $1`,
-		userID, googleID, avatarURL,
+func (r *AdminAuthRepo) LinkGoogleAccount(
+	ctx context.Context,
+	userID string,
+	googleID string,
+	avatarURL string,
+) error {
+
+	_, err := r.db.ExecContext(
+		ctx,
+		`
+		UPDATE admin_users
+		SET
+			google_id = $2,
+			avatar_url = COALESCE(NULLIF($3, ''), avatar_url),
+			email_verified = TRUE
+		WHERE id = $1
+		`,
+		userID,
+		googleID,
+		avatarURL,
 	)
+
 	return err
 }
 
@@ -603,23 +776,70 @@ func (r *AdminAuthRepo) GoogleSignupTx(
 	defer tx.Rollback()
 
 	var user model.AdminUser
+
 	const qUser = `
-        INSERT INTO admin_users (username, email, google_id, avatar_url, auth_provider, is_super_admin)
-        VALUES ($1, $2, $3, $4, 'google', FALSE)
-        ON CONFLICT (email) DO NOTHING
-        RETURNING id, username, email, password_hash, google_id, avatar_url, auth_provider,
-                  failed_login_attempts, locked_until, last_login_at, created_at
-    `
-	// `username` has a UNIQUE NOT NULL constraint; derive one from the email
-	// local-part since Google users never choose one explicitly.
-	err = tx.QueryRowContext(ctx, qUser, usernameFromEmail(email), email, googleID, avatarURL).Scan(
-		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.GoogleID,
-		&user.AvatarURL, &user.AuthProvider, &user.FailedLoginAttempts,
-		&user.LockedUntil, &user.LastLoginAt, &user.CreatedAt,
+		INSERT INTO admin_users (
+			username,
+			password_hash,
+			email,
+			google_id,
+			avatar_url,
+			is_super_admin,
+			auth_provider,
+			email_verified
+		)
+		VALUES (
+			$1,
+			NULL,
+			$2,
+			$3,
+			NULLIF($4, ''),
+			FALSE,
+			'google',
+			TRUE
+		)
+		ON CONFLICT (email) DO NOTHING
+		RETURNING
+			id,
+			username,
+			email,
+			password_hash,
+			google_id,
+			avatar_url,
+			auth_provider,
+			email_verified,
+			failed_login_attempts,
+			locked_until,
+			last_login_at,
+			created_at
+	`
+
+	err = tx.QueryRowContext(
+		ctx,
+		qUser,
+		usernameFromEmail(email),
+		email,
+		googleID,
+		avatarURL,
+	).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.GoogleID,
+		&user.AvatarURL,
+		&user.AuthProvider,
+		&user.EmailVerified,
+		&user.FailedLoginAttempts,
+		&user.LockedUntil,
+		&user.LastLoginAt,
+		&user.CreatedAt,
 	)
+
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, sql.ErrNoRows // email or derived username collided — caller re-checks by email
+		return nil, sql.ErrNoRows
 	}
+
 	if err != nil {
 		return nil, fmt.Errorf("GoogleSignupTx: insert admin_user: %w", err)
 	}
@@ -673,6 +893,7 @@ func usernameFromEmail(email string) string {
 }
 
 var ErrInvalidPasswordResetToken = errors.New("invalid or expired password reset token")
+var ErrInvalidEmailVerificationToken = errors.New("invalid or expired email verification token")
 
 func (r *AdminAuthRepo) ReplacePasswordResetTokenTx(
 	ctx context.Context,
@@ -720,6 +941,51 @@ func (r *AdminAuthRepo) ReplacePasswordResetTokenTx(
 	return newTokenID, nil
 }
 
+func (r *AdminAuthRepo) ReplaceEmailVerificationTokenTx(
+	ctx context.Context,
+	adminUserID, tokenHash string,
+	expiresAt time.Time,
+) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("ReplaceEmailVerificationTokenTx begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var dummyID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM admin_users WHERE id = $1 FOR UPDATE
+	`, adminUserID).Scan(&dummyID)
+	if err != nil {
+		return "", fmt.Errorf("lock admin user row for verification token replacement: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE email_verification_tokens
+		SET used_at = NOW()
+		WHERE admin_user_id = $1 AND used_at IS NULL
+	`, adminUserID)
+	if err != nil {
+		return "", fmt.Errorf("invalidate previous verification tokens: %w", err)
+	}
+
+	var newTokenID string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO email_verification_tokens (admin_user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, adminUserID, tokenHash, expiresAt).Scan(&newTokenID)
+	if err != nil {
+		return "", fmt.Errorf("insert new verification token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit verification token replace: %w", err)
+	}
+
+	return newTokenID, nil
+}
+
 func (r *AdminAuthRepo) InvalidatePasswordResetTokenByID(ctx context.Context, tokenID string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE password_reset_tokens
@@ -728,6 +994,18 @@ func (r *AdminAuthRepo) InvalidatePasswordResetTokenByID(ctx context.Context, to
 	`, tokenID)
 	if err != nil {
 		return fmt.Errorf("InvalidatePasswordResetTokenByID: %w", err)
+	}
+	return nil
+}
+
+func (r *AdminAuthRepo) InvalidateEmailVerificationTokenByID(ctx context.Context, tokenID string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE email_verification_tokens
+		SET used_at = NOW()
+		WHERE id = $1 AND used_at IS NULL
+	`, tokenID)
+	if err != nil {
+		return fmt.Errorf("InvalidateEmailVerificationTokenByID: %w", err)
 	}
 	return nil
 }
@@ -747,6 +1025,82 @@ func (r *AdminAuthRepo) FindValidPasswordResetToken(ctx context.Context, tokenHa
 		return nil, fmt.Errorf("FindValidPasswordResetToken: %w", err)
 	}
 	return &t, nil
+}
+
+func (r *AdminAuthRepo) FindValidEmailVerificationToken(ctx context.Context, tokenHash string) (*model.EmailVerificationToken, error) {
+	var t model.EmailVerificationToken
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, admin_user_id, token_hash, expires_at, used_at, created_at
+		FROM email_verification_tokens
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+	`, tokenHash).Scan(&t.ID, &t.AdminUserID, &t.TokenHash, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidEmailVerificationToken
+	}
+	if err != nil {
+		return nil, fmt.Errorf("FindValidEmailVerificationToken: %w", err)
+	}
+
+	return &t, nil
+}
+
+func (r *AdminAuthRepo) VerifyEmailTx(ctx context.Context, tokenHash string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("VerifyEmailTx begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var adminUserID string
+	err = tx.QueryRowContext(ctx, `
+		UPDATE email_verification_tokens
+		SET used_at = NOW()
+		WHERE token_hash = $1
+		  AND used_at IS NULL
+		  AND expires_at > NOW()
+		RETURNING admin_user_id
+	`, tokenHash).Scan(&adminUserID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidEmailVerificationToken
+	}
+	if err != nil {
+		return fmt.Errorf("VerifyEmailTx claim token: %w", err)
+	}
+
+	resUser, err := tx.ExecContext(ctx, `
+		UPDATE admin_users
+		SET email_verified = TRUE
+		WHERE id = $1
+	`, adminUserID)
+	if err != nil {
+		return fmt.Errorf("VerifyEmailTx update user: %w", err)
+	}
+
+	rowsUser, err := resUser.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("VerifyEmailTx check user rows affected: %w", err)
+	}
+	if rowsUser == 0 {
+		return fmt.Errorf("user not found for email verification: %s", adminUserID)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE email_verification_tokens
+		SET used_at = NOW()
+		WHERE admin_user_id = $1
+		  AND used_at IS NULL
+	`, adminUserID)
+	if err != nil {
+		return fmt.Errorf("VerifyEmailTx invalidate remaining tokens: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("VerifyEmailTx commit: %w", err)
+	}
+
+	return nil
 }
 
 func (r *AdminAuthRepo) ResetPasswordTx(ctx context.Context, resetTokenID, adminUserID, newPasswordHash string) error {
