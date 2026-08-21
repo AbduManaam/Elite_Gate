@@ -67,7 +67,8 @@ resource "aws_iam_role_policy" "github_cd_permissions" {
 
         Resource = [
           aws_ecr_repository.admin.arn,
-          aws_ecr_repository.gateway.arn
+          aws_ecr_repository.gateway.arn,
+          aws_ecr_repository.worker.arn
         ]
       },
       {

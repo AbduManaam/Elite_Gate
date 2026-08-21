@@ -39,3 +39,25 @@ resource "aws_ecr_repository" "gateway" {
     Component = "Gateway"
   })
 }
+
+resource "aws_ecr_repository" "worker" {
+  name                 = "elitegate-worker"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = false
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name      = "elitegate-worker"
+      Component = "Worker"
+    }
+  )
+}
