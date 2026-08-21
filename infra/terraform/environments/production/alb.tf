@@ -100,3 +100,64 @@ resource "aws_lb_listener" "https" {
     target_group_arn = aws_lb_target_group.gateway.arn
   }
 }
+# ---------------------------------------------------------------------------
+# Admin API Target Group
+# ---------------------------------------------------------------------------
+
+resource "aws_lb_target_group" "admin" {
+  name        = "elitegate-production-admin-tg"
+  port        = var.admin_port
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.elitegate.id
+
+  health_check {
+    enabled             = true
+    protocol            = "HTTP"
+    path                = "/healthz"
+    port                = "traffic-port"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  deregistration_delay = 30
+
+  tags = merge(local.common_tags, {
+    Name      = "elitegate-production-admin-tg"
+    Component = "LoadBalancing"
+    Tier      = "Admin"
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Register EC2 Admin service on port 9090
+# ---------------------------------------------------------------------------
+
+resource "aws_lb_target_group_attachment" "admin" {
+  target_group_arn = aws_lb_target_group.admin.arn
+  target_id        = aws_instance.elitegate_app.id
+  port             = var.admin_port
+}
+
+# ---------------------------------------------------------------------------
+# Route api.elitegateway.site to Admin API
+# ---------------------------------------------------------------------------
+
+resource "aws_lb_listener_rule" "admin_api" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.admin.arn
+  }
+
+  condition {
+    host_header {
+      values = ["api.elitegateway.site"]
+    }
+  }
+}
