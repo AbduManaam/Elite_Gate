@@ -255,8 +255,8 @@ build_environment_file() {
 
   cat >"$temporary_env" <<EOF
 APP_ENV=${app_environment}
-ALLOWED_ORIGINS=https://app.elitegateway.site
-FRONTEND_URL=https://app.elitegateway.site
+ALLOWED_ORIGINS=https://elitegateway.site,https://app.elitegateway.site
+FRONTEND_URL=https://elitegateway.site
 
 ADMIN_PORT=${admin_port}
 GATEWAY_PORT=${gateway_port}

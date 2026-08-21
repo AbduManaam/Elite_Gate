@@ -22,3 +22,11 @@ resource "aws_route53_record" "frontend_app" {
   ttl     = 300
   records = ["080689a018702fe4.vercel-dns-017.com."]
 }
+
+resource "aws_route53_record" "frontend_root" {
+  zone_id = data.aws_route53_zone.elitegateway.zone_id
+  name    = "elitegateway.site"
+  type    = "A"
+  ttl     = 300
+  records = ["216.198.79.1"]
+}
