@@ -93,6 +93,11 @@ validate_inputs() {
 prepare_directory() {
   mkdir -p "${DEPLOY_DIR}/releases"
   chmod 750 "$DEPLOY_DIR"
+
+  if ! docker network inspect elitegate_net >/dev/null 2>&1; then
+    log "Creating Docker network elitegate_net..."
+    docker network create elitegate_net >/dev/null
+  fi
 }
 
 login_to_ecr() {
@@ -155,12 +160,13 @@ build_environment_file() {
     project_id="${PROJECT_ID:-}"
   fi
 
-  [[ -n "$project_id" ]] ||
-    fail "PROJECT_ID is required to start Gateway container, but was not found in SSM (/elitegate/production/gateway/project_id) or environment variable PROJECT_ID."
-
-  local uuid_regex='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-  if [[ ! "$project_id" =~ $uuid_regex ]]; then
-    fail "PROJECT_ID '${project_id}' is not a valid UUID format."
+  if [[ -z "$project_id" ]]; then
+    log "PROJECT_ID is not configured yet; continuing in bootstrap mode without a permanent Gateway container."
+  else
+    local uuid_regex='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    if [[ ! "$project_id" =~ $uuid_regex ]]; then
+      fail "PROJECT_ID '${project_id}' is not a valid UUID format."
+    fi
   fi
 
   enable_grpc_port="$(get_parameter "/elitegate/production/gateway/enable_grpc" 2>/dev/null || echo "false")"
@@ -373,6 +379,11 @@ start_new_admin() {
 start_new_gateway() {
   log "Starting the new Gateway container..."
 
+  if ! grep -Eq '^PROJECT_ID=.+$' "$ENV_FILE"; then
+    log "PROJECT_ID is not configured; skipping Gateway container during bootstrap."
+    return 0
+  fi
+
   local grpc_port_args=()
   if grep -q '^ENABLE_GRPC_PORT=true' "$ENV_FILE"; then
     grpc_port_args=(-p 50051:50051)
@@ -416,13 +427,20 @@ start_new_worker() {
 }
 
 wait_for_health() {
-  log "Waiting for Admin, Gateway, and Worker health checks..."
+  log "Waiting for service health checks..."
 
   local attempts=30
   local delay_seconds=5
   local admin_healthy=false
   local gateway_healthy=false
   local worker_healthy=false
+  local gateway_required=true
+
+  if ! grep -Eq '^PROJECT_ID=.+$' "$ENV_FILE"; then
+    gateway_required=false
+    gateway_healthy=true
+    log "Gateway health check is skipped during bootstrap because PROJECT_ID is not configured."
+  fi
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     local admin_status
@@ -430,10 +448,15 @@ wait_for_health() {
     local worker_status
 
     admin_status="$(docker inspect --format '{{.State.Status}}' "$ADMIN_CONTAINER" 2>/dev/null || echo "stopped")"
-    gateway_status="$(docker inspect --format '{{.State.Status}}' "$GATEWAY_CONTAINER" 2>/dev/null || echo "stopped")"
+    if $gateway_required; then
+      gateway_status="$(docker inspect --format '{{.State.Status}}' "$GATEWAY_CONTAINER" 2>/dev/null || echo "stopped")"
+    else
+      gateway_status="skipped"
+    fi
     worker_status="$(docker inspect --format '{{.State.Status}}' "$WORKER_CONTAINER" 2>/dev/null || echo "stopped")"
 
-    if [[ "$admin_status" != "running" || "$gateway_status" != "running" || "$worker_status" != "running" ]]; then
+    if [[ "$admin_status" != "running" || "$worker_status" != "running" ]] ||
+       { $gateway_required && [[ "$gateway_status" != "running" ]]; }; then
       log "Health check attempt ${attempt}/${attempts} waiting for containers to run (Admin: ${admin_status}, Gateway: ${gateway_status}, Worker: ${worker_status})."
       sleep "$delay_seconds"
       continue
@@ -446,7 +469,7 @@ wait_for_health() {
       fi
     fi
 
-    if ! $gateway_healthy; then
+    if $gateway_required && ! $gateway_healthy; then
       if curl --fail --silent --show-error "http://127.0.0.1:8080/healthz" >/dev/null; then
         log "Gateway health check passed."
         gateway_healthy=true
@@ -461,7 +484,11 @@ wait_for_health() {
     fi
 
     if $admin_healthy && $gateway_healthy && $worker_healthy; then
-      log "All Admin, Gateway, and Worker health checks passed successfully."
+      if $gateway_required; then
+        log "Admin, Gateway, and Worker health checks passed successfully."
+      else
+        log "Bootstrap deployment health checks passed for Admin and Worker; Gateway was intentionally skipped."
+      fi
       return 0
     fi
 
