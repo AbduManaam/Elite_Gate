@@ -17,7 +17,7 @@ readonly GATEWAY_IMAGE="${2:-}"
 readonly WORKER_IMAGE="${3:-}"
 
 readonly AWS_REGION="ap-south-1"
-readonly AWS_ACCOUNT_ID="716904822411"
+readonly AWS_ACCOUNT_ID="174581551854"
 readonly ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 readonly DEPLOY_DIR="/opt/elitegate"
